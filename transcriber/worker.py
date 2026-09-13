@@ -37,23 +37,28 @@ def run_job(
 
         if job["state"] in ("queued", "transcribing"):
             stage = "transcribing"
-            jobs.set_state(job_id, "transcribing")
-            items = webhook.get("tracks") or []
-            if items:
-                # Rebasing is the caller's job: tracks.py does no environment work.
-                rebased = [{**t, "path": jobs.rebase_path(t["path"])} for t in items]
-                segments = tracks.coalesce(transcribe_tracks(rebased, transcribe))
-            else:
-                segments = transcribe(jobs.rebase_path(webhook["audio_path"]))
-            # jobs' atomic writer: a half-written transcript.md would be read back as the
-            # finished text by the very next resume.
-            jobs._write_atomic(transcript, transcribe_module.to_markdown(segments).encode())
+            # transcript.md is written only once the ASR has finished, so its presence
+            # means the transcription is done — a webhook re-sent for a job that failed
+            # while publishing (the receiver re-queues it as `queued`) never re-runs the
+            # hour of CPU work.
+            if not transcript.exists():
+                jobs.set_state(job_id, "transcribing")
+                items = webhook.get("tracks") or []
+                if items:
+                    # Rebasing is the caller's job: tracks.py does no environment work.
+                    rebased = [{**t, "path": jobs.rebase_path(t["path"])} for t in items]
+                    segments = tracks.coalesce(transcribe_tracks(rebased, transcribe))
+                else:
+                    segments = transcribe(jobs.rebase_path(webhook["audio_path"]))
+                # jobs' atomic writer: a half-written transcript.md would be read back as
+                # the finished text by the very next resume.
+                jobs._write_atomic(transcript, transcribe_module.to_markdown(segments).encode())
+                log.info("job %s: transcribed (%d segments)", job_id, len(segments))
             job = jobs.set_state(job_id, "publishing")
-            log.info("job %s: transcribed (%d segments)", job_id, len(segments))
 
         if job["state"] == "publishing":
             stage = "publishing"
-            text = transcript.read_text()
+            text = transcript.read_text(encoding="utf-8")
             url, title = job.get("outline_url"), job.get("outline_title")
             if not url:
                 url, title = send(publish.build_anarlog_payload(webhook, text))

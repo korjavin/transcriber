@@ -134,6 +134,24 @@ def test_resume_in_publishing_skips_asr_and_tr2outline(tmp_path):
     assert jobs.load_job(JOB_ID)["state"] == "done"
 
 
+def test_requeued_job_with_a_transcript_is_not_transcribed_again(tmp_path):
+    """The receiver re-queues a failed job as `queued`; a finished transcript stands."""
+    make_job(tmp_path, state="queued")
+    (jobs.job_dir(JOB_ID) / "transcript.md").write_text("[00:00] Alice: privet", encoding="utf-8")
+    seen = {}
+
+    worker.run_job(
+        JOB_ID,
+        transcribe=boom,
+        transcribe_tracks=boom,
+        send=lambda payload: seen.update(payload=payload) or ("https://outline.example/d", "t"),
+        callback=lambda *args: None,
+    )
+
+    assert seen["payload"]["data"]["transcript_text"] == "[00:00] Alice: privet"
+    assert jobs.load_job(JOB_ID)["state"] == "done"
+
+
 def test_resume_in_transcribing_without_transcript_starts_over(tmp_path):
     make_job(tmp_path, state="transcribing")
     calls = []
@@ -218,8 +236,10 @@ def test_worker_resumes_unfinished_jobs_in_order_and_serially(tmp_path):
     w.start()
 
     assert done.wait(5)
-    assert finished == ["job-a", "job-b", "job-c"]
+    time.sleep(0.05)  # let a fourth job, if one was wrongly queued, show up
+    assert finished == ["job-a", "job-b", "job-c"]  # done jobs are not resumed
     assert overlaps == []
+    assert w.q.empty()
 
 
 def test_main_exits_2_and_names_the_missing_variable(monkeypatch, caplog):

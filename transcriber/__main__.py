@@ -19,18 +19,6 @@ log = logging.getLogger("transcriber")
 REQUIRED = ("WEBHOOK_SECRET", "TR2OUTLINE_URL", "ANARLOG_WEBHOOK_SECRET")
 
 
-def _warm_up() -> None:
-    # ponytail: best-effort preload so the first webhook does not wait for the model
-    # download. Failures are the first job's problem, not startup's.
-    try:
-        from transcriber.asr_parakeet import _get_model
-
-        _get_model()
-        log.info("ASR model ready")
-    except Exception:
-        log.exception("ASR model warm-up failed")
-
-
 def main() -> int:
     logging.basicConfig(
         level=(os.getenv("LOG_LEVEL") or "INFO").upper(),
@@ -42,9 +30,11 @@ def main() -> int:
         log.error("missing required environment variables: %s", ", ".join(missing))
         return 2
 
-    if (os.getenv("ASR_ENGINE") or "parakeet") == "parakeet":
-        threading.Thread(target=_warm_up, name="warm-up", daemon=True).start()
-
+    # ponytail: no model warm-up thread. asr_parakeet._MODEL is deliberately lock-free
+    # ("the worker runs one transcription at a time"), and a warm-up thread would be a
+    # second loader — two ~1 GB loads at once, or two downloads into the same MODEL_DIR.
+    # The first job pays for the download instead. Upgrade path: lock _get_model, then
+    # warm up here.
     worker = Worker()
     worker.start()  # resume unfinished jobs before the first new webhook can be served
     port = int(os.getenv("PORT") or 8080)
