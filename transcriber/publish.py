@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import time
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -74,6 +75,31 @@ def _reply_object(response) -> dict:
     return reply if isinstance(reply, dict) else {}
 
 
+def _absolute_url(url: str, job_id: str) -> str:
+    """tr2outline must return an absolute document URL.
+
+    An older build returned Outline's relative path (`/doc/...`), which chat clients
+    render against their own host. Prefix OUTLINE_BASE_URL when it is set; either way
+    the anomaly is a WARNING, because the peer is the thing that needs fixing.
+    """
+    if urlparse(url).scheme:
+        return url
+    base = os.environ.get("OUTLINE_BASE_URL")
+    if not base:
+        log.warning(
+            "job %s: tr2outline returned a relative url (%r) and OUTLINE_BASE_URL is unset",
+            job_id,
+            url[:200],
+        )
+        return url
+    log.warning(
+        "job %s: tr2outline returned a relative url (%r); prefixing OUTLINE_BASE_URL",
+        job_id,
+        url[:200],
+    )
+    return urljoin(base, url)
+
+
 def build_anarlog_payload(webhook: dict, transcript_text: str) -> dict:
     """The note.enhanced body for tr2outline.
 
@@ -122,6 +148,7 @@ def send_to_tr2outline(payload: dict) -> tuple[str, str]:
         # The status is the peer's string and ends up in job.json: keep it bounded.
         status = repr(reply.get("status"))[:60]
         raise PublishError(f"tr2outline created no document for job {job_id}: {status}")
+    url = _absolute_url(url, job_id)
     title = title if isinstance(title, str) and title else payload["data"]["meeting"]["title"]
     log.info(
         # url and title are the peer's strings: quoted and bounded so neither can

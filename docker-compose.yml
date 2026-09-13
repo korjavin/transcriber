@@ -8,12 +8,14 @@ services:
     # values from .env next to this file, or from the stack environment when
     # Portainer deploys this repo as a git stack (there is no .env there). A
     # variable left unset is simply not passed, so the image defaults stand.
-    # See .env.example for what each one means. OUTLINE_* is deliberately absent:
-    # outline_client.py is not wired into the pipeline yet.
+    # See .env.example for what each one means. OUTLINE_BASE_URL is passed through
+    # because publish.py uses it to absolutize a relative url from tr2outline; the
+    # other OUTLINE_* are absent, outline_client.py is not wired into the pipeline yet.
     environment:
       - WEBHOOK_SECRET
       - TR2OUTLINE_URL
       - ANARLOG_WEBHOOK_SECRET
+      - OUTLINE_BASE_URL
       - DATA_DIR
       - HOST_DATA_DIR
       - PORT

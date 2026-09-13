@@ -198,7 +198,7 @@ for installations where tr2outline is unavailable or unwanted.
 | `WHISPER_LANGUAGE` | no | — | Empty = autodetect |
 | `TR2OUTLINE_URL` | yes | — | tr2outline webhook endpoint |
 | `ANARLOG_WEBHOOK_SECRET` | yes | — | Secret signing the tr2outline webhook |
-| `OUTLINE_BASE_URL` | no | — | Fallback path: Outline base URL |
+| `OUTLINE_BASE_URL` | no | — | Outline base URL. Prefixed onto a **relative** document url returned by tr2outline (logged as a warning); also the fallback path's base |
 | `OUTLINE_API_KEY` | no | — | Fallback path: Outline API token |
 | `OUTLINE_COLLECTION_ID` | no | — | Fallback path: Outline collection UUID |
 | `LOG_LEVEL` | no | `INFO` | Stdlib logging level |

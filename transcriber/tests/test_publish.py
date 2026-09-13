@@ -230,6 +230,40 @@ def test_a_peer_error_string_cannot_grow_the_persisted_error(tr2outline):
     assert len(str(err.value)) < 150
 
 
+# --- relative urls from tr2outline -----------------------------------------
+
+
+def test_relative_url_is_prefixed_with_the_outline_base_url(tr2outline, monkeypatch, caplog):
+    monkeypatch.setenv("OUTLINE_BASE_URL", "https://outline.example.com")
+    tr2outline((200, {**SUCCESS, "url": "/doc/weekly-sync-abc123"}))
+
+    url, _ = send_to_tr2outline(build_anarlog_payload(WEBHOOK, "x"))
+
+    assert url == "https://outline.example.com/doc/weekly-sync-abc123"
+    assert "relative url" in caplog.text
+    assert [r.levelname for r in caplog.records if "relative url" in r.message] == ["WARNING"]
+
+
+def test_relative_url_without_a_base_url_is_left_alone(tr2outline, monkeypatch, caplog):
+    monkeypatch.delenv("OUTLINE_BASE_URL", raising=False)
+    tr2outline((200, {**SUCCESS, "url": "/doc/weekly-sync-abc123"}))
+
+    url, _ = send_to_tr2outline(build_anarlog_payload(WEBHOOK, "x"))
+
+    assert url == "/doc/weekly-sync-abc123"
+    assert "OUTLINE_BASE_URL is unset" in caplog.text
+
+
+def test_absolute_url_is_untouched_and_logs_no_warning(tr2outline, monkeypatch, caplog):
+    monkeypatch.setenv("OUTLINE_BASE_URL", "https://outline.example.com")
+    tr2outline((200, SUCCESS))
+
+    url, _ = send_to_tr2outline(build_anarlog_payload(WEBHOOK, "x"))
+
+    assert url == SUCCESS["url"]
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
 # --- callback --------------------------------------------------------------
 
 

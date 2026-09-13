@@ -86,6 +86,32 @@ def test_mixed_audio_job_runs_end_to_end(tmp_path):
     assert job["outline_title"] == "2026-09-13 standup"
 
 
+def test_a_silent_recording_publishes_the_no_speech_placeholder(tmp_path, caplog):
+    """A 0-segment ASR result still gets a document and a callback, so the user
+    learns the call was silent instead of getting an empty page."""
+    caplog.set_level(logging.INFO)
+    make_job(tmp_path)
+    seen = {}
+
+    def send(payload):
+        seen["payload"] = payload
+        return "https://outline.example/doc/abc", "2026-09-13 standup"
+
+    worker.run_job(
+        JOB_ID,
+        transcribe=lambda path: [],
+        transcribe_tracks=boom,
+        send=send,
+        callback=lambda *args: seen.update(callback=args),
+    )
+
+    assert (jobs.job_dir(JOB_ID) / "transcript.md").read_text() == worker.NO_SPEECH
+    assert seen["payload"]["data"]["transcript_text"] == worker.NO_SPEECH
+    assert seen["callback"][0] == CALLBACK_URL
+    assert jobs.load_job(JOB_ID)["state"] == "done"
+    assert f"job {JOB_ID}: no speech detected" in caplog.text
+
+
 def test_tracks_are_rebased_attributed_and_coalesced(tmp_path, monkeypatch):
     monkeypatch.setenv("HOST_DATA_DIR", "/host/data")
     make_job(
