@@ -60,8 +60,14 @@ class Fake:
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
+                if 300 <= status < 400:
+                    self.send_header("Location", "/redirected")
                 self.end_headers()
                 self.wfile.write(data)
+
+            # A followed redirect arrives as a GET: record it, so the test that asserts
+            # "one request" actually proves redirects are not followed.
+            do_GET = do_POST
 
             def log_message(self, *args):
                 pass
@@ -94,6 +100,11 @@ def serve():
 def env(monkeypatch):
     monkeypatch.setenv("ANARLOG_WEBHOOK_SECRET", ANARLOG_SECRET)
     monkeypatch.setenv("WEBHOOK_SECRET", WEBHOOK_SECRET)
+    # requests routes even loopback through HTTP_PROXY unless no_proxy says otherwise,
+    # so on a machine with a proxy configured these tests would leave the box.
+    for var in ("http_proxy", "https_proxy", "all_proxy"):
+        monkeypatch.delenv(var, raising=False)
+        monkeypatch.delenv(var.upper(), raising=False)
     monkeypatch.setattr(publish, "BACKOFF_S", [0])  # one retry, no sleeping
 
 
@@ -187,6 +198,8 @@ def test_send_retries_a_connection_error(monkeypatch):
         (200, {"status": "ignored", "reason": "event not handled"}),
         (200, {"status": "success", "url": ""}),
         (200, {"status": "success"}),
+        (200, {"status": "success", "url": {"not": "a string"}}),
+        (302, {"status": "moved"}),  # a redirect would drop the signed body
         (200, ["not an object"]),
         (400, {"status": "error"}),
     ],
@@ -200,10 +213,21 @@ def test_unusable_reply_raises_without_retry(tr2outline, reply):
     assert len(fake.requests) == 1
 
 
-def test_title_falls_back_to_the_meeting_title(tr2outline):
-    tr2outline((200, {**SUCCESS, "title": ""}))
+@pytest.mark.parametrize("title", ["", None, {"not": "a string"}])
+def test_title_falls_back_to_the_meeting_title(tr2outline, title):
+    tr2outline((200, {**SUCCESS, "title": title}))
 
     assert send_to_tr2outline(build_anarlog_payload(WEBHOOK, "x"))[1] == "Weekly sync"
+
+
+def test_a_peer_error_string_cannot_grow_the_persisted_error(tr2outline):
+    # The message is stored in job.json: a chatty (or hostile) peer must not fill it.
+    tr2outline((200, {"status": "e" * 5000, "url": ""}))
+
+    with pytest.raises(PublishError) as err:
+        send_to_tr2outline(build_anarlog_payload(WEBHOOK, "x"))
+
+    assert len(str(err.value)) < 150
 
 
 # --- callback --------------------------------------------------------------

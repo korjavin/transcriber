@@ -46,7 +46,11 @@ def _send(url: str, body: bytes, headers: dict, timeout: float, job_id: str, wha
     detail = ""
     for delay in [*BACKOFF_S, None]:
         try:
-            response = requests.post(url, data=body, headers=headers, timeout=timeout)
+            # No redirects: a 3xx would rewrite this POST to a GET and drop the signed
+            # body, and a cross-host one would hand our signature to the new target.
+            response = requests.post(
+                url, data=body, headers=headers, timeout=timeout, allow_redirects=False
+            )
         except requests.RequestException as exc:
             # Type name only: an exception can carry the request (and its signed
             # headers) along, and neither the log nor the error may leak that.
@@ -112,13 +116,13 @@ def send_to_tr2outline(payload: dict) -> tuple[str, str]:
 
     # A 2xx that is not a created document is a contract problem, not a blip: no retry.
     reply = _reply_object(response)
-    url = reply.get("url")
-    if reply.get("status") != "success" or not url:
-        raise PublishError(
-            f"tr2outline created no document for job {job_id}: {reply.get('status')!r}"
-        )
+    url, title = reply.get("url"), reply.get("title")
+    if reply.get("status") != "success" or not isinstance(url, str) or not url:
+        # The status is the peer's string and ends up in job.json: keep it bounded.
+        status = repr(reply.get("status"))[:60]
+        raise PublishError(f"tr2outline created no document for job {job_id}: {status}")
     log.info("job %s published to tr2outline", job_id)
-    return url, reply.get("title") or payload["data"]["meeting"]["title"]
+    return url, title if isinstance(title, str) and title else payload["data"]["meeting"]["title"]
 
 
 def ready_message(title: str, url: str) -> str:
