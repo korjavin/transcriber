@@ -1,0 +1,13 @@
+.git/
+.github/
+.beads/
+.dolt/
+.claude/
+.venv/
+**/__pycache__/
+**/*.pyc
+.env
+data/
+transcriber/tests/
+docs/
+README.md
