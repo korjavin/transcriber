@@ -5,7 +5,7 @@ import json
 import pytest
 import requests
 
-from transcribetor.outline_client import OutlineClient, OutlineError
+from transcriber.outline_client import OutlineClient, OutlineError
 
 BASE_URL = "https://outline.example.com"
 API_KEY = "ol_api_fake_key_for_tests"

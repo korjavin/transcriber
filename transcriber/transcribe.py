@@ -64,7 +64,7 @@ def to_markdown(segments: list[Segment]) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if len(args) != 1:
-        print("usage: python -m transcribetor.transcribe <audio>", file=sys.stderr)
+        print("usage: python -m transcriber.transcribe <audio>", file=sys.stderr)
         return 2
     print(to_markdown(transcribe(args[0])))
     return 0

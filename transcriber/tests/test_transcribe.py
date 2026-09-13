@@ -7,7 +7,7 @@ from typing import ClassVar
 
 import pytest
 
-from transcribetor import transcribe as t
+from transcriber import transcribe as t
 
 WHISPER_ENV = ("WHISPER_MODEL", "WHISPER_LANGUAGE", "WHISPER_DEVICE", "WHISPER_COMPUTE_TYPE")
 
@@ -112,9 +112,9 @@ def test_to_markdown_empty():
 def test_import_does_not_need_or_construct_a_model(monkeypatch):
     # sys.modules[name] = None makes `import name` raise ImportError.
     monkeypatch.setitem(sys.modules, "faster_whisper", None)
-    monkeypatch.delitem(sys.modules, "transcribetor.transcribe")
+    monkeypatch.delitem(sys.modules, "transcriber.transcribe")
 
-    module = importlib.import_module("transcribetor.transcribe")
+    module = importlib.import_module("transcriber.transcribe")
 
     assert module._MODELS == {}
 
