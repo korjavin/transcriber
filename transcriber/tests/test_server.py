@@ -125,6 +125,14 @@ def test_malformed_json_is_400(url, queued):
     assert queued == []
 
 
+def test_deeply_nested_json_without_a_signature_still_gets_401(url, queued):
+    """The body is parsed before the signature is checked, so json.loads runs on
+    unauthenticated bytes: its RecursionError must not escape as a dropped socket."""
+    nested = b"[" * 200_000 + b"]" * 200_000  # RecursionError, and well under MAX_BODY
+    assert post(url, raw=nested, sig="sha256=00")[0] == 401
+    assert queued == []
+
+
 @pytest.mark.parametrize(
     "payload",
     [

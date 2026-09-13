@@ -7,6 +7,9 @@ ENV PIP_NO_CACHE_DIR=1 \
     HF_HOME=/models/hf
 
 # No ffmpeg package: audio decoding goes through PyAV, bundled with faster-whisper.
+# No ca-certificates package either: python:3.12-slim already ships
+# /etc/ssl/certs/ca-certificates.crt, so outbound HTTPS (tr2outline, the HF hub)
+# works without an apt layer.
 RUN useradd -r -u 10001 app && mkdir -p /data /models && chown app /data /models
 
 WORKDIR /app

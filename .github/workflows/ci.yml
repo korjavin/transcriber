@@ -18,33 +18,18 @@ jobs:
       - run: pytest -q
 
   docker:
+    # Build-only gate for pull requests. Publishing is deploy.yml's job alone:
+    # it builds and pushes ghcr.io/<repo>:<sha> on every push to master, so a
+    # second build here would only duplicate it.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      # Pull requests only build; pushes land on master, so they also publish.
-      - uses: docker/login-action@v3
-        if: github.event_name == 'push'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
-          tags: |
-            ghcr.io/korjavin/transcriber:latest
-            ghcr.io/korjavin/transcriber:${{ github.sha }}
-          cache-from: type=gha
-          # Fork pull requests only get a read-only Actions cache, so export on push only.
-          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max' || '' }}
-      # Redeploy the Portainer stack once the owner adds the webhook secret:
-      # - name: Trigger Portainer redeploy
-      #   if: github.event_name == 'push'
-      #   env:
-      #     HOOK: ${{ secrets.PORTAINER_WEBHOOK_URL }}
-      #   run: curl -sS -X POST "$HOOK"
+          push: false
+          tags: transcriber:pr

@@ -1,34 +1,79 @@
 services:
   transcriber:
+    # Placeholder tag. .github/workflows/deploy.yml rewrites this line with the
+    # commit SHA on the `deploy` branch, which is the branch Portainer watches.
     image: ghcr.io/korjavin/transcriber:latest
-    restart: unless-stopped
-    env_file:
-      # Optional: Portainer passes the stack's variables as env and never writes
-      # a .env into the clone, so requiring the file would break that deploy.
-      - path: .env
-        required: false
-    # Drop this block to keep the receiver reachable only on the shared network.
-    ports:
-      - "8080:8080"
-    networks:
-      - transcriber
+    container_name: transcriber
+    # Every variable the pipeline reads, passed straight through: Compose takes the
+    # values from .env next to this file, or from the stack environment when
+    # Portainer deploys this repo as a git stack (there is no .env there). A
+    # variable left unset is simply not passed, so the image defaults stand.
+    # See .env.example for what each one means. OUTLINE_* is deliberately absent:
+    # outline_client.py is not wired into the pipeline yet.
+    environment:
+      - WEBHOOK_SECRET
+      - TR2OUTLINE_URL
+      - ANARLOG_WEBHOOK_SECRET
+      - DATA_DIR
+      - HOST_DATA_DIR
+      - PORT
+      - LOG_LEVEL
+      - ASR_ENGINE
+      - MODEL_DIR
+      - WHISPER_MODEL
+      - WHISPER_DEVICE
+      - WHISPER_COMPUTE_TYPE
+      - WHISPER_LANGUAGE
     volumes:
-      # SAME host directory that jitsi-capture mounts as its DATA_DIR.
-      # It must be writable by uid 10001 (the container runs as a non-root user).
-      - ${HOST_DATA_DIR:?set HOST_DATA_DIR in .env}:/data
+      # jitsi-capture's own named volume, mounted here at the very same path, so
+      # the audio_path in the webhook resolves without translation and
+      # HOST_DATA_DIR stays unset. jitsi-capture writes jobs/<id>/audio.webm and
+      # tracks/ there; this service only reads them and writes its own job state
+      # under DATA_DIR/transcriber/ (see README: that directory has to be created
+      # once and chowned to uid 10001).
+      - jitsi-capture-data:${DATA_DIR:-/data}
       # Models download on first run (~1-2 GB) and are cached here.
-      - transcriber-models:/models
+      - transcriber-models:${MODEL_DIR:-/models}
+    # No ports: mapping — Traefik fronts POST /webhook and GET /health over the
+    # shared network below.
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${TRAEFIK_NETWORK_NAME:-traefik}"
+
+      # HTTPS router
+      - "traefik.http.routers.transcriber.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.transcriber.entrypoints=websecure"
+      - "traefik.http.routers.transcriber.tls=true"
+      - "traefik.http.routers.transcriber.tls.certresolver=${TRAEFIK_CERTRESOLVER:-myresolver}"
+
+      # HTTP -> HTTPS redirect router
+      - "traefik.http.routers.transcriber-http.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.transcriber-http.entrypoints=web"
+      - "traefik.http.routers.transcriber-http.middlewares=transcriber-https"
+      - "traefik.http.middlewares.transcriber-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.transcriber-https.redirectscheme.permanent=true"
+
+      # Service loadbalancer configuration
+      - "traefik.http.services.transcriber.loadbalancer.server.port=8080"
+      - "traefik.http.services.transcriber.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.transcriber.loadbalancer.healthcheck.interval=30s"
+    restart: unless-stopped
     deploy:
       resources:
         limits:
           # Knob: int8 parakeet plus whisper-fallback headroom. Lower it if the host is tight.
           memory: 6g
 
-networks:
-  transcriber:
-    # Fixed name, no stack prefix: jitsi-capture and tr2outline join this network
-    # as external and reach the receiver at http://transcriber:8080.
-    name: transcriber
-
 volumes:
+  # jitsi-capture's volume, created by its stack under exactly this fixed name.
+  jitsi-capture-data:
+    external: true
+    name: jitsi-capture-data
   transcriber-models: {}
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK_NAME:-traefik}

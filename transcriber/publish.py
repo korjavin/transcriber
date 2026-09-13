@@ -110,6 +110,7 @@ def send_to_tr2outline(payload: dict) -> tuple[str, str]:
         "x-anarlog-event": EVENT,
         "x-anarlog-signature": sign_body(body, _env("ANARLOG_WEBHOOK_SECRET")),
     }
+    started = time.monotonic()
     response = _send(_env("TR2OUTLINE_URL"), body, headers, 60.0, job_id, "tr2outline webhook")
     if not 200 <= response.status_code < 300:
         raise PublishError(f"tr2outline rejected job {job_id}: HTTP {response.status_code}")
@@ -121,8 +122,17 @@ def send_to_tr2outline(payload: dict) -> tuple[str, str]:
         # The status is the peer's string and ends up in job.json: keep it bounded.
         status = repr(reply.get("status"))[:60]
         raise PublishError(f"tr2outline created no document for job {job_id}: {status}")
-    log.info("job %s published to tr2outline", job_id)
-    return url, title if isinstance(title, str) and title else payload["data"]["meeting"]["title"]
+    title = title if isinstance(title, str) and title else payload["data"]["meeting"]["title"]
+    log.info(
+        # url and title are the peer's strings: quoted and bounded so neither can
+        # inject a newline into the log.
+        "job %s: published to tr2outline (url=%r, title=%r, %.1fs)",
+        job_id,
+        url[:200],
+        title[:200],
+        time.monotonic() - started,
+    )
+    return url, title
 
 
 def ready_message(title: str, url: str) -> str:
@@ -143,4 +153,4 @@ def post_callback(callback_url: str, job_id: str, content: str) -> None:
     response = _send(callback_url, body, headers, 30.0, job_id, "ready callback")
     if not 200 <= response.status_code < 300:
         raise PublishError(f"ready callback for job {job_id} rejected: HTTP {response.status_code}")
-    log.info("job %s callback delivered", job_id)
+    log.info("job %s: callback delivered (status=%d)", job_id, response.status_code)
