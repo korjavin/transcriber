@@ -132,6 +132,10 @@ def test_missing_data_url_raises(monkeypatch, client, response):
         (FakeResponse(status_code=403, text='{"error":"forbidden"}'), None),
         (FakeResponse(payload={"data": {}}), None),
         (None, requests.ConnectionError(f"Max retries exceeded with url {BASE_URL}")),
+        # A server that echoes the Authorization header back in its error body.
+        (FakeResponse(status_code=400, text=f'{{"error":"bad Bearer {API_KEY}"}}'), None),
+        # ...and the same, positioned to straddle the 200-char truncation boundary.
+        (FakeResponse(status_code=400, text="e" * 190 + API_KEY), None),
     ],
 )
 def test_api_key_never_appears_in_error(monkeypatch, client, response, exc):
@@ -142,6 +146,8 @@ def test_api_key_never_appears_in_error(monkeypatch, client, response, exc):
 
     assert API_KEY not in str(err.value)
     assert API_KEY not in repr(err.value)
+    # not even a prefix of it: truncation must not slice a partial key out of the body
+    assert API_KEY[:10] not in str(err.value)
 
 
 def test_from_env(monkeypatch):

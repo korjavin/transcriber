@@ -53,7 +53,10 @@ class OutlineClient:
             raise OutlineError(f"request to Outline failed: {type(exc).__name__}") from None
 
         if not 200 <= response.status_code < 300:
-            raise OutlineError(f"{response.status_code}: {response.text[:200]}")
+            # Redact before truncating: a server that echoes the request back (or quotes the
+            # Authorization header in its error) must not leak the key into the message.
+            body = response.text.replace(self._api_key, "***")[:200]
+            raise OutlineError(f"{response.status_code}: {body}")
 
         try:
             path = response.json()["data"]["url"]
