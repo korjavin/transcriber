@@ -134,7 +134,7 @@ with `200 OK` and ignored. Body (see `models.go` in tr2outline):
   "data": {
     "meeting": {
       "id": "<job id>",
-      "title": "<topic> (<date>)",
+      "title": "<topic>",
       "participants": ["Alice", "Bob"],
       "note": "",
       "summaries": [],
@@ -144,6 +144,9 @@ with `200 OK` and ignored. Body (see `models.go` in tr2outline):
   }
 }
 ```
+
+`title` is the topic alone — the date comes from `created_at`, which tr2outline
+prefixes to the Outline title itself (putting it here too would print it twice).
 
 `note`, `summaries` and `action_items` stay empty for now — there is no
 summarization step in the chain, and tr2outline renders the document correctly
