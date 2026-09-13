@@ -1,0 +1,30 @@
+{
+  "event": "recording.finished",
+  "id": "123456",
+  "message_id": 987654,
+  "stream": "team",
+  "topic": "Weekly sync",
+  "jitsi_url": "https://meet.your-domain.com/weekly-sync-abc",
+  "audio_path": "/host/data/jobs/123456/mixed.webm",
+  "duration_s": 20.0,
+  "started_at": "2026-09-13T12:30:00Z",
+  "ended_at": "2026-09-13T12:30:20Z",
+  "participants": ["Alice", "Bob"],
+  "callback_url": "http://jitsi-capture:8080/notify",
+  "tracks": [
+    {
+      "id": "1",
+      "name": "Alice",
+      "path": "/host/data/jobs/123456/alice.webm",
+      "offset_s": 0.0,
+      "ended_s": 20.0
+    },
+    {
+      "id": "2",
+      "name": "Bob",
+      "path": "/host/data/jobs/123456/bob.webm",
+      "offset_s": 5.0,
+      "ended_s": 20.0
+    }
+  ]
+}
