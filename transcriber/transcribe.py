@@ -15,6 +15,7 @@ class Segment:
     start: float  # seconds
     end: float
     text: str
+    speaker: str | None = None  # set by per-track attribution; None = mixed audio
 
 
 def _get_model(model: str, device: str, compute_type: str):
@@ -55,9 +56,14 @@ def _timecode(seconds: float) -> str:
 
 
 def to_markdown(segments: list[Segment]) -> str:
-    """One '[MM:SS] text' line per segment ('[H:MM:SS]' from an hour in); blanks dropped."""
+    """One '[MM:SS] text' line per segment, '[MM:SS] Name: text' when the speaker is known.
+
+    '[H:MM:SS]' from an hour in; blank segments are dropped.
+    """
     return "\n".join(
-        f"[{_timecode(s.start)}] {s.text.strip()}" for s in segments if s.text.strip()
+        f"[{_timecode(s.start)}] " + (f"{s.speaker}: " if s.speaker else "") + s.text.strip()
+        for s in segments
+        if s.text.strip()
     )
 
 
