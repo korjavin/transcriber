@@ -11,7 +11,7 @@ import os
 import signal
 import threading
 
-from transcriber import server
+from transcriber import jobs, server
 from transcriber.worker import Worker
 
 log = logging.getLogger("transcriber")
@@ -47,7 +47,12 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    log.info("listening on port %d", port)
+    log.info(
+        "listening on port %d (engine=%s, data_dir=%s)",
+        port,
+        os.getenv("ASR_ENGINE") or "parakeet",
+        jobs.data_dir(),
+    )
     httpd.serve_forever()
     # A job mid-flight is not finished here: its state is on disk and the next start
     # resumes it.

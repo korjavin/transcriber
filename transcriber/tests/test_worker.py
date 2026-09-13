@@ -1,6 +1,7 @@
 """Pipeline tests: real job store on tmp_path, every boundary injected as a fake."""
 
 import json
+import logging
 import threading
 import time
 
@@ -240,6 +241,44 @@ def test_worker_resumes_unfinished_jobs_in_order_and_serially(tmp_path):
     assert finished == ["job-a", "job-b", "job-c"]  # done jobs are not resumed
     assert overlaps == []
     assert w.q.empty()
+
+
+def test_lifecycle_lines_are_logged_at_info(tmp_path, monkeypatch, caplog):
+    """The deploy-time breadcrumb: one INFO line per step, each carrying the job id."""
+    monkeypatch.setenv("ASR_ENGINE", "whisper")
+    make_job(tmp_path)
+    caplog.set_level(logging.INFO, logger="transcriber.worker")
+
+    worker.run_job(
+        JOB_ID,
+        transcribe=lambda path: [Segment(0.0, 2.0, "hello there")],
+        transcribe_tracks=boom,
+        send=lambda payload: ("https://outline.example/doc/abc", "title"),
+        callback=lambda *args: None,
+    )
+
+    lines = [r.getMessage() for r in caplog.records if r.levelname == "INFO"]
+    assert f"job {JOB_ID}: transcription started (engine=whisper, mixed)" in lines
+    finished = next(line for line in lines if "transcription finished" in line)
+    assert finished.startswith(f"job {JOB_ID}: transcription finished (")
+    assert finished.endswith("1 segments)")
+    assert f"job {JOB_ID}: done" in lines
+
+
+def test_tracks_job_logs_its_track_count(tmp_path, caplog):
+    make_job(tmp_path, webhook={"tracks": [{"id": "1", "name": "Alice", "path": "/data/a.webm"}]})
+    caplog.set_level(logging.INFO, logger="transcriber.worker")
+
+    worker.run_job(
+        JOB_ID,
+        transcribe=lambda path: [Segment(0.0, 1.0, "one")],
+        send=lambda payload: ("https://outline.example/doc/abc", "title"),
+        callback=lambda *args: None,
+    )
+
+    assert f"job {JOB_ID}: transcription started (engine=parakeet, tracks=1)" in [
+        r.getMessage() for r in caplog.records
+    ]
 
 
 def test_main_exits_2_and_names_the_missing_variable(monkeypatch, caplog):

@@ -188,7 +188,7 @@ for installations where tr2outline is unavailable or unwanted.
 |---|---|---|---|
 | `WEBHOOK_SECRET` | yes | — | Shared secret with jitsi-capture: verifies the incoming webhook and signs the callback |
 | `DATA_DIR` | no | `/data` | Shared audio volume inside the container (same path as in jitsi-capture) |
-| `HOST_DATA_DIR` | no | = `DATA_DIR` | Host path of that volume; incoming paths are rebased `HOST_DATA_DIR` → `DATA_DIR` |
+| `HOST_DATA_DIR` | no | = `DATA_DIR` | Path jitsi-capture reports its recordings under; incoming paths are rebased `HOST_DATA_DIR` → `DATA_DIR`. Leave **unset** in the stack — both services mount the same named volume at the same path, so the rebase is a no-op |
 | `PORT` | no | `8080` | Port the receiver listens on |
 | `ASR_ENGINE` | no | `parakeet` | `parakeet` (onnx-asr) or `whisper` (faster-whisper) |
 | `MODEL_DIR` | no | `/models` | Model cache: onnx-asr model dir and `HF_HOME` for whisper |
@@ -202,6 +202,14 @@ for installations where tr2outline is unavailable or unwanted.
 | `OUTLINE_API_KEY` | no | — | Fallback path: Outline API token |
 | `OUTLINE_COLLECTION_ID` | no | — | Fallback path: Outline collection UUID |
 | `LOG_LEVEL` | no | `INFO` | Stdlib logging level |
+
+Three more variables are read by `docker-compose.yml` rather than by the code:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `DOMAIN` | yes *(compose)* | — | Public hostname Traefik routes to this service |
+| `TRAEFIK_NETWORK_NAME` | no | `traefik` | Existing external Docker network Traefik runs on |
+| `TRAEFIK_CERTRESOLVER` | no | `myresolver` | Traefik ACME resolver that issues the certificate |
 
 Configuration is env-vars **only**. `.env` is gitignored; `.env.example` holds
 placeholders exclusively. Logs print the **name** of a variable, never its
@@ -224,7 +232,8 @@ python -m transcriber.transcribe /path/to/audio.webm
 
 The tests shadow `faster_whisper` and `requests` with fakes, so they pass with
 no network and no model downloads. CI (GitHub Actions, Python 3.12) runs exactly
-these two commands on every push to `master` and on every pull request.
+these two commands on every push to `master` and on every pull request; the
+`docker` job additionally builds the image on every pull request.
 
 **Docker:** build and run the image locally with the same env file the stack uses:
 
@@ -235,8 +244,10 @@ docker run --rm -p 8080:8080 --env-file .env \
   -v /srv/jitsi-capture/data:/data -v transcriber-models:/models transcriber
 ```
 
-Replace `/srv/jitsi-capture/data` with your own `HOST_DATA_DIR` — `--env-file`
-sets it inside the container, not in the shell that writes the `-v` flag.
+Replace `/srv/jitsi-capture/data` with whatever host directory holds
+jitsi-capture's recordings; it is mounted at `DATA_DIR` (`/data`) either way, so
+`HOST_DATA_DIR` stays unset. A run with any required variable missing exits `2`
+after a single line naming the variables — no traceback, no restart loop.
 
 The image carries no ASR model: the first transcription downloads it (~1-2 GB)
 into `MODEL_DIR`, which is why `/models` is a named volume — otherwise every
@@ -247,55 +258,111 @@ container restart re-downloads it.
 ## 🚢 Deploy
 
 One image, one compose stack. `docker-compose.yml` is written for Portainer but
-runs the same under plain `docker compose up -d`:
+runs the same under plain `docker compose up -d`.
+
+### Run it locally
 
 ```bash
-cp .env.example .env        # fill in the secrets, set HOST_DATA_DIR
+cp .env.example .env        # fill in the secrets and DOMAIN
+# compose has no `build:`, so build the image under the tag it references
+docker build -t ghcr.io/korjavin/transcriber:latest .
 docker compose up -d
+docker compose logs -f
 ```
 
-**Networking.** The stack creates a Docker network literally named `transcriber`
-(no stack prefix), and the three services address each other by service name:
+`:latest` is only a local/placeholder tag — the registry holds SHA tags, so
+`docker compose pull` finds nothing to pull. The compose file also expects two
+things that already exist on the server: the external Traefik network
+(`TRAEFIK_NETWORK_NAME`, default `traefik`) and jitsi-capture's
+`jitsi-capture-data` volume. It publishes no ports of its own; Traefik fronts
+the service on `DOMAIN`.
+
+### Automated deployment (GitHub Actions → ghcr.io → Portainer)
+
+`.github/workflows/deploy.yml` runs on every push to `master` (and on
+`workflow_dispatch`):
+
+1. builds the image and pushes it to `ghcr.io/korjavin/transcriber:<sha>`;
+2. checks out a `deploy` branch, rewrites the `image:` line in
+   `docker-compose.yml` with that SHA tag, commits `[skip ci]` and force-pushes
+   `deploy`;
+3. calls the Portainer redeploy webhook stored in the repository secret
+   `PORTAINER_REDEPLOY_HOOK` (skipped when the secret is empty).
+
+`master` keeps `image: ghcr.io/korjavin/transcriber:latest` as a placeholder;
+only the `deploy` branch carries an immutable SHA tag. **Point the Portainer
+git-ops stack at branch `deploy`**, never at `master`, and paste the webhook URL
+Portainer generates into the `PORTAINER_REDEPLOY_HOOK` secret.
+
+`.github/workflows/ci.yml` only *builds* the image on pull requests — deploy.yml
+is the single publisher, and it publishes the SHA tag alone.
+
+**The ghcr package has to be public.** Portainer pulls anonymously, and the very
+first push creates the package as private. There is no workflow step that can
+change that; do it once by hand in the package settings
+(*Packages → transcriber → Package settings → Change visibility → Public*) and
+check it with:
+
+```bash
+gh api user/packages/container/transcriber -q .visibility
+```
+
+### Stack variables
+
+Portainer pulls the repository, so no `.env` file exists on the node —
+`docker-compose.yml` passes every variable through from the stack environment.
+Set these in the stack:
+
+| Variable | Notes |
+| --- | --- |
+| `WEBHOOK_SECRET` | required — shared with jitsi-capture, verifies the inbound webhook and signs the callback |
+| `TR2OUTLINE_URL` | required — tr2outline's Anarlog endpoint |
+| `ANARLOG_WEBHOOK_SECRET` | required — signs the tr2outline webhook |
+| `DOMAIN` | required — public hostname Traefik routes to this service |
+| `DATA_DIR` | optional, default `/data` — container path of the shared volume |
+| `HOST_DATA_DIR` | leave **unset** — see the shared volume below |
+| `PORT` | optional, default `8080` — must match the Traefik `loadbalancer.server.port` label |
+| `LOG_LEVEL` | optional, default `INFO` |
+| `ASR_ENGINE`, `MODEL_DIR` | optional, defaults `parakeet` / `/models` |
+| `WHISPER_MODEL`, `WHISPER_DEVICE`, `WHISPER_COMPUTE_TYPE`, `WHISPER_LANGUAGE` | optional, fallback backend only — see [§ Environment variables](#️-environment-variables) |
+| `TRAEFIK_NETWORK_NAME`, `TRAEFIK_CERTRESOLVER` | optional, defaults `traefik` / `myresolver` |
+
+### The shared audio volume
+
+jitsi-capture's `jitsi-capture-data` named volume is mounted here as
+`external: true` at the very same path (`DATA_DIR`, `/data`), so the
+`audio_path` in the webhook resolves without translation and `HOST_DATA_DIR`
+stays unset. jitsi-capture writes `/data/jobs/<id>/audio.webm` (and `tracks/`);
+this service only reads those and writes its own state under
+`/data/transcriber/`.
+
+**One-time step per volume.** jitsi-capture runs as root, so `/data` and
+`/data/jobs` are `755 root` — uid `10001` (this container's user) can read the
+audio but cannot create `/data/transcriber` itself. Create it once, from the
+jitsi-capture container, before the first transcriber deploy:
+
+```bash
+docker compose exec jitsi-capture sh -c 'mkdir -p /data/transcriber && chown 10001 /data/transcriber'
+```
+
+Deliberately not automated: neither the Dockerfile, the compose file nor an
+entrypoint touches the volume's ownership — a service that chowns a volume it
+shares with another service is how the other service loses its data.
+
+The model cache is a second, ordinary named volume (`transcriber-models` at
+`MODEL_DIR`): the image ships no ASR model, and the first transcription
+downloads ~1–2 GB into it.
+
+### Networking
+
+The stack joins only the external Traefik network. Public traffic reaches
+`POST /webhook` and `GET /health` through Traefik on `DOMAIN`; the sibling
+services reach the container directly by name on that same network:
 
 * jitsi-capture's `WEBHOOK_URL` → `http://transcriber:8080/webhook`
 * transcriber's `TR2OUTLINE_URL` → tr2outline's Anarlog endpoint
-* transcriber's callback target arrives in the webhook (`callback_url`, jitsi-capture's `/notify`)
-
-Deploy this stack first, then attach the other two to the same network — service
-name resolution only works across stacks when they share one:
-
-```yaml
-services:
-  jitsi-capture:
-    networks: [transcriber]
-networks:
-  transcriber:
-    external: true
-```
-
-**The shared audio volume.** `HOST_DATA_DIR` in `.env` must be the exact host
-directory jitsi-capture writes into, and both containers mount it at `/data`.
-jitsi-capture rebases `DATA_DIR` → `HOST_DATA_DIR` before sending a webhook and
-transcriber rebases back, so with the default identical mount path the rebase is
-a no-op.
-
-The container runs as a non-root user (uid `10001`) and writes job state under
-`DATA_DIR/transcriber/`, so the host directory must be writable by it — Docker
-never chowns a bind mount:
-
-```bash
-sudo chown -R 10001 "$HOST_DATA_DIR"   # or give it a group both services share
-```
-
-**Portainer stack.** In Portainer: *Stacks → Add stack → Repository*, point it at
-this repository with `docker-compose.yml` as the compose path, paste the contents
-of `.env.example` into the stack's environment variables (with real values), and
-deploy. Enable the stack's webhook and store its URL as the `PORTAINER_WEBHOOK_URL`
-repository secret — the redeploy step in `.github/workflows/ci.yml` is commented
-out until that secret exists.
-
-**Images.** CI builds the image on every pull request and, on push to `master`,
-pushes `ghcr.io/korjavin/transcriber:latest` and `:<sha>` to GHCR.
+* transcriber's callback target arrives in the webhook (`callback_url`,
+  jitsi-capture's `/notify`)
 
 ---
 

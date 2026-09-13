@@ -10,8 +10,10 @@ A failed job is never retried automatically; re-sending the webhook re-queues it
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import threading
+import time
 
 from transcriber import jobs, publish, tracks
 from transcriber import transcribe as transcribe_module
@@ -44,6 +46,14 @@ def run_job(
             if not transcript.exists():
                 jobs.set_state(job_id, "transcribing")
                 items = webhook.get("tracks") or []
+                engine = os.getenv("ASR_ENGINE") or "parakeet"
+                log.info(
+                    "job %s: transcription started (engine=%s, %s)",
+                    job_id,
+                    engine,
+                    f"tracks={len(items)}" if items else "mixed",
+                )
+                started = time.monotonic()
                 if items:
                     # Rebasing is the caller's job: tracks.py does no environment work.
                     rebased = [{**t, "path": jobs.rebase_path(t["path"])} for t in items]
@@ -53,7 +63,12 @@ def run_job(
                 # jobs' atomic writer: a half-written transcript.md would be read back as
                 # the finished text by the very next resume.
                 jobs._write_atomic(transcript, transcribe_module.to_markdown(segments).encode())
-                log.info("job %s: transcribed (%d segments)", job_id, len(segments))
+                log.info(
+                    "job %s: transcription finished (%.1fs, %d segments)",
+                    job_id,
+                    time.monotonic() - started,
+                    len(segments),
+                )
             job = jobs.set_state(job_id, "publishing")
 
         if job["state"] == "publishing":

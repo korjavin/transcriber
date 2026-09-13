@@ -30,6 +30,17 @@ EVENT = "recording.finished"
 _QUEUE_LOCK = threading.Lock()
 
 
+def _peek_id(payload: object) -> str:
+    """The id for the "webhook received" line, from a body nobody has verified yet.
+
+    Bounded and quoted: at this point the id is attacker-controlled, unbounded text,
+    and it must not be able to flood or forge lines in the log.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
+        return "?"
+    return repr(payload["id"][:64])
+
+
 def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPRequestHandler]:
     """Build a handler that verifies with `secret` and hands accepted job ids to `on_job`."""
 
@@ -76,6 +87,15 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
                 return
 
             raw = self.rfile.read(length)
+            # Parsed before the signature is checked so the lifecycle line can carry the
+            # id, but nothing else uses `payload` until verification has passed and the
+            # reply order is unchanged (a bad signature is still a 401, never a 400).
+            payload = self._parse(raw)
+            log.info(
+                "webhook received: event=%r id=%s",
+                (self.headers.get(EVENT_HEADER) or "")[:64],
+                _peek_id(payload),
+            )
             if not verify_signature(raw, self.headers.get(SIGNATURE_HEADER), secret):
                 log.info("webhook rejected: bad signature")
                 self._reply(401, {"status": "unauthorized"})
@@ -84,7 +104,7 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
                 self._reply(200, {"status": "ignored"})
                 return
 
-            job_id = self._job_id(raw)
+            job_id = self._job_id(payload)
             if job_id is None:
                 self._reply(400, {"status": "bad request"})  # never log the body
                 return
@@ -125,11 +145,16 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
         def _route(self) -> str:
             return self.path.split("?", 1)[0]
 
-        def _job_id(self, raw: bytes) -> str | None:
-            """The payload's id, or None when the request is not a usable job."""
+        def _parse(self, raw: bytes) -> object:
+            """The decoded body, or None when it is not JSON. Never logged, never echoed."""
             try:
-                payload = json.loads(raw)
+                return json.loads(raw)
             except ValueError:
+                return None
+
+        def _job_id(self, payload: object) -> str | None:
+            """The payload's id, or None when the request is not a usable job."""
+            if payload is None:
                 log.info("webhook rejected: malformed JSON")
                 return None
             if (
