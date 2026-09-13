@@ -15,6 +15,11 @@ log = logging.getLogger(__name__)
 
 MODEL_NAME = "nemo-parakeet-tdt-0.6b-v3"
 MODEL_SUBDIR = "parakeet-tdt-0.6b-v3"
+# CPU inference is the owner's decision, so say so instead of taking onnxruntime's default
+# provider list: on a macOS dev box that list starts with CoreML, which hands the graph to
+# the Neural Engine and gets the process killed. The deployed Linux image has CPU only.
+# ponytail: widen this list if the service is ever given a GPU.
+PROVIDERS = ["CPUExecutionProvider"]
 
 # One instance per process: loading takes seconds and ~1 GB of RAM. The worker runs one
 # transcription at a time, so a plain global needs no lock.
@@ -34,9 +39,9 @@ def _get_model():
         log.info("loading %s (int8) from MODEL_DIR subdirectory %s", MODEL_NAME, MODEL_SUBDIR)
         # VAD is mandatory, not a nicety: the model tops out at ~20-30 s of audio per
         # chunk while calls run for minutes.
-        _MODEL = onnx_asr.load_model(MODEL_NAME, path, quantization="int8").with_vad(
-            onnx_asr.load_vad("silero")
-        )
+        _MODEL = onnx_asr.load_model(
+            MODEL_NAME, path, quantization="int8", providers=PROVIDERS
+        ).with_vad(onnx_asr.load_vad("silero", providers=PROVIDERS))
     return _MODEL
 
 

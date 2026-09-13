@@ -47,7 +47,7 @@ class FakeModel:
 def fake_onnx_asr(monkeypatch, tmp_path):
     module = types.ModuleType("onnx_asr")
     module.load_model = lambda *args, **kwargs: FakeModel(args, kwargs)
-    module.load_vad = lambda name: f"vad:{name}"
+    module.load_vad = lambda name, **kwargs: f"vad:{name}:{kwargs.get('providers')}"
     monkeypatch.setitem(sys.modules, "onnx_asr", module)
     monkeypatch.setattr(p, "_MODEL", None)
     monkeypatch.setenv("MODEL_DIR", str(tmp_path))
@@ -82,11 +82,12 @@ def test_model_is_loaded_once_with_int8_and_vad(decoded, tmp_path):
     assert FakeModel.loads == [
         (
             (p.MODEL_NAME, os.path.join(str(tmp_path), "parakeet-tdt-0.6b-v3")),
-            {"quantization": "int8"},
+            {"quantization": "int8", "providers": ["CPUExecutionProvider"]},
         )
     ]
-    assert FakeModel.vads == ["vad:silero"]
-    assert p._MODEL.vad == "vad:silero"
+    # Both graphs must stay on the CPU provider, the VAD's included.
+    assert FakeModel.vads == ["vad:silero:['CPUExecutionProvider']"]
+    assert p._MODEL.vad == "vad:silero:['CPUExecutionProvider']"
 
 
 def test_model_dir_defaults_to_models(decoded, monkeypatch):
