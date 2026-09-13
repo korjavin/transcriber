@@ -1,4 +1,10 @@
-"""faster-whisper transcription on CPU, rendered as Markdown with timecodes."""
+"""CPU transcription rendered as Markdown with timecodes.
+
+`transcribe()` dispatches on ASR_ENGINE: `parakeet` (onnx-asr, the default, in
+transcriber.asr_parakeet) or `whisper` (faster-whisper, here). Both end up decoding
+through the same PyAV — whisper just does it internally rather than via
+transcriber.audio, which is why it still takes the path.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +35,24 @@ def _get_model(model: str, device: str, compute_type: str):
     return _MODELS[key]
 
 
-def transcribe(
+def transcribe(audio_path: str, *, engine: str | None = None, **kwargs) -> list[Segment]:
+    """Transcribe an audio file with the configured backend.
+
+    `engine` beats ASR_ENGINE, which defaults to `parakeet`. Backend-specific options
+    are passed through, so asking whisper's `model=` of parakeet is a TypeError.
+    """
+    engine = engine or os.getenv("ASR_ENGINE") or "parakeet"
+    if engine == "parakeet":
+        # Imported here, not at module level: asr_parakeet imports Segment from this module.
+        from transcriber.asr_parakeet import transcribe_parakeet
+
+        return transcribe_parakeet(audio_path, **kwargs)
+    if engine == "whisper":
+        return transcribe_whisper(audio_path, **kwargs)
+    raise ValueError(f"unknown ASR engine {engine!r} (expected 'parakeet' or 'whisper')")
+
+
+def transcribe_whisper(
     audio_path: str, *, model: str | None = None, language: str | None = None
 ) -> list[Segment]:
     """Transcribe an audio file (WebM/Opus is fine — faster-whisper decodes via PyAV).
