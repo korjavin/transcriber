@@ -241,11 +241,11 @@ these two commands on every push to `master` and on every pull request; the
 cp .env.example .env        # then fill in the secrets
 docker build -t transcriber .
 docker run --rm -p 8080:8080 --env-file .env \
-  -v /srv/jitsi-capture/data:/data -v transcriber-models:/models transcriber
+  -v jitsi-capture-data:/data -v transcriber-models:/models transcriber
 ```
 
-Replace `/srv/jitsi-capture/data` with whatever host directory holds
-jitsi-capture's recordings; it is mounted at `DATA_DIR` (`/data`) either way, so
+`jitsi-capture-data` is jitsi-capture's own named volume, mounted here at
+`DATA_DIR` (`/data`) — the same path it has on the other side, which is why
 `HOST_DATA_DIR` stays unset. A run with any required variable missing exits `2`
 after a single line naming the variables — no traceback, no restart loop.
 
@@ -270,8 +270,10 @@ docker compose up -d
 docker compose logs -f
 ```
 
-`:latest` is only a local/placeholder tag — the registry holds SHA tags, so
-`docker compose pull` finds nothing to pull. The compose file also expects two
+`:latest` is only a local/placeholder tag: from now on the registry is fed SHA
+tags alone, so `docker compose pull` either finds nothing or, until the stale
+`:latest` left by the old CI job is deleted, silently pulls something very old.
+Build it locally, do not pull it. The compose file also expects two
 things that already exist on the server: the external Traefik network
 (`TRAEFIK_NETWORK_NAME`, default `traefik`) and jitsi-capture's
 `jitsi-capture-data` volume. It publishes no ports of its own; Traefik fronts

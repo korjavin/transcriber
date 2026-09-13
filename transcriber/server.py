@@ -146,10 +146,15 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
             return self.path.split("?", 1)[0]
 
         def _parse(self, raw: bytes) -> object:
-            """The decoded body, or None when it is not JSON. Never logged, never echoed."""
+            """The decoded body, or None when it is not JSON. Never logged, never echoed.
+
+            RecursionError as well as ValueError: this runs on unauthenticated bytes, and
+            deeply nested JSON raises it. Uncaught it would escape do_POST and leave the
+            caller with a dropped socket and no status line at all.
+            """
             try:
                 return json.loads(raw)
-            except ValueError:
+            except (ValueError, RecursionError):
                 return None
 
         def _job_id(self, payload: object) -> str | None:

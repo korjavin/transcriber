@@ -124,10 +124,12 @@ def send_to_tr2outline(payload: dict) -> tuple[str, str]:
         raise PublishError(f"tr2outline created no document for job {job_id}: {status}")
     title = title if isinstance(title, str) and title else payload["data"]["meeting"]["title"]
     log.info(
-        "job %s: published to tr2outline (url=%s, title=%r, %.1fs)",
+        # url and title are the peer's strings: quoted and bounded so neither can
+        # inject a newline into the log.
+        "job %s: published to tr2outline (url=%r, title=%r, %.1fs)",
         job_id,
-        url,
-        title,
+        url[:200],
+        title[:200],
         time.monotonic() - started,
     )
     return url, title

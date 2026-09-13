@@ -33,5 +33,3 @@ jobs:
           context: .
           push: false
           tags: transcriber:pr
-          # Read-only: a fork pull request cannot export to the Actions cache.
-          cache-from: type=gha
