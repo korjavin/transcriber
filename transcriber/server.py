@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -22,12 +23,19 @@ EVENT_HEADER = "x-jitsi-capture-event"
 SIGNATURE_HEADER = "x-jitsi-capture-signature"
 EVENT = "recording.finished"
 
+# ponytail: one global lock makes check-and-queue atomic across the server's threads, so
+# two simultaneous deliveries of the same id cannot both queue it. Ceiling: it is in-process,
+# which is enough for the single receiver this service runs; a second process would need an
+# O_EXCL claim on job.json instead.
+_QUEUE_LOCK = threading.Lock()
+
 
 def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPRequestHandler]:
     """Build a handler that verifies with `secret` and hands accepted job ids to `on_job`."""
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"  # jitsi-capture reuses the connection
+        timeout = 30  # a stalled peer must not hold a thread forever
 
         def log_message(self, fmt, *args):
             # No default stderr access log: route it through logging at DEBUG.
@@ -59,6 +67,10 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
             except ValueError:
                 self._reply(400, {"status": "bad request"})
                 return
+            if length < 0:
+                # read(-1) would block on the socket until the peer goes away.
+                self._reply(400, {"status": "bad request"})
+                return
             if length > MAX_BODY:
                 self._reply(413, {"status": "too large"})
                 return
@@ -77,26 +89,37 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
                 self._reply(400, {"status": "bad request"})  # never log the body
                 return
 
-            existing = self._existing(job_id)
-            if existing is not None and existing.get("state") != "failed":
-                # jitsi-capture retries until it gets a 2xx; never re-queue a live job.
-                log.info("job %s: duplicate webhook (state=%s)", job_id, existing.get("state"))
-                self._reply(200, {"status": "duplicate", "id": job_id})
-                return
+            try:
+                with _QUEUE_LOCK:
+                    existing = self._existing(job_id)
+                    if existing is not None and existing.get("state") != "failed":
+                        # jitsi-capture retries until it gets a 2xx; never re-queue a live job.
+                        log.info(
+                            "job %s: duplicate webhook (state=%s)", job_id, existing.get("state")
+                        )
+                        self._reply(200, {"status": "duplicate", "id": job_id})
+                        return
 
-            jobs.save_webhook(job_id, raw)
-            jobs.save_job(
-                {
-                    "id": job_id,
-                    "state": "queued",
-                    "error": "",
-                    "received_at": jobs.now_rfc3339(),
-                    "outline_url": "",
-                    "outline_title": "",
-                }
-            )
-            log.info("job %s: queued", job_id)
-            on_job(job_id)
+                    jobs.save_webhook(job_id, raw)
+                    jobs.save_job(
+                        {
+                            "id": job_id,
+                            "state": "queued",
+                            "error": "",
+                            "received_at": jobs.now_rfc3339(),
+                            "outline_url": "",
+                            "outline_title": "",
+                        }
+                    )
+                log.info("job %s: queued", job_id)
+                on_job(job_id)
+            except Exception:
+                # Without this the client gets a closed socket and no status line at all.
+                # 500 keeps jitsi-capture retrying; a job already written as "queued" is
+                # also picked up by the worker's resume scan (jobs.list_unfinished).
+                log.exception("job %s: could not be accepted", job_id)
+                self._reply(500, {"status": "error", "id": job_id})
+                return
             self._reply(202, {"status": "queued", "id": job_id})
 
         def _route(self) -> str:
@@ -119,8 +142,9 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
                 return None
             try:
                 jobs.job_dir(payload["id"])  # trust boundary: id becomes a path segment
-            except ValueError as exc:
-                log.info("webhook rejected: %s", exc)
+            except ValueError:
+                # The id is body content and unbounded in length: say so, never echo it.
+                log.info("webhook rejected: invalid job id")
                 return None
             return payload["id"]
 

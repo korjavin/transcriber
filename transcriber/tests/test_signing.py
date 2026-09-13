@@ -32,5 +32,6 @@ def test_verify_rejects_empty_secret_header_or_none():
 
 
 def test_verify_rejects_non_ascii_header():
-    # compare_digest raises on non-ASCII str; the header is attacker-controlled.
+    # The header is attacker-controlled: a non-ASCII one must mismatch, not raise
+    # (hmac.compare_digest rejects non-ASCII str, hence the encode in verify_signature).
     assert not signing.verify_signature(BODY, "sha256=café", SECRET)

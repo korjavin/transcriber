@@ -78,6 +78,13 @@ def test_bad_signature_is_401(url, queued):
     assert queued == []
 
 
+def test_absent_signature_header_is_401(url, queued):
+    body = json.dumps(PAYLOAD).encode()
+    headers = {"x-jitsi-capture-event": "recording.finished"}
+    assert request(url, "/webhook", body=body, headers=headers)[0] == 401
+    assert queued == []
+
+
 def test_empty_secret_never_authorizes(queued):
     handler = server.make_handler("", queued.append)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -89,6 +96,23 @@ def test_empty_secret_never_authorizes(queued):
         httpd.shutdown()
         httpd.server_close()
     assert queued == []
+
+
+def test_failure_while_accepting_answers_500():
+    # A closed socket with no status line would make jitsi-capture retry into the
+    # duplicate branch and give up on a job nobody ever queued.
+    def boom(job_id):
+        raise RuntimeError("queue is gone")
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(SECRET, boom))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        status, reply = post(f"http://127.0.0.1:{httpd.server_address[1]}", PAYLOAD)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+    assert (status, reply) == (500, {"status": "error", "id": "123456"})
 
 
 def test_other_event_is_ignored(url, queued):
@@ -128,6 +152,19 @@ def test_oversized_body_is_413(url, queued):
     assert queued == []
 
 
+@pytest.mark.parametrize("length", ["-1", "not-a-number"])
+def test_unusable_content_length_is_400(url, queued, length):
+    # A negative length must never reach rfile.read(): read(-1) blocks until the peer
+    # goes away and reads past the 1 MiB cap, both before the signature is even checked.
+    headers = {
+        "Content-Length": length,
+        "x-jitsi-capture-event": "recording.finished",
+        "x-jitsi-capture-signature": sign_body(b"", SECRET),
+    }
+    assert request(url, "/webhook", body=b"", headers=headers)[0] == 400
+    assert queued == []
+
+
 def test_happy_path_queues_the_job(url, queued, data_dir):
     body = json.dumps(PAYLOAD).encode()
     status, reply = post(url, raw=body)
@@ -153,6 +190,22 @@ def test_live_and_done_jobs_are_not_requeued(url, queued, state):
     assert post(url, PAYLOAD)[0] == 202
     jobs.set_state("123456", state)
     assert post(url, PAYLOAD)[0] == 200
+    assert queued == ["123456"]
+
+
+def test_simultaneous_deliveries_queue_the_job_once(url, queued):
+    # jitsi-capture retries fast: the duplicate guard has to hold across threads, and
+    # the concurrent job.json writes must not blow up a request with no response.
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(post(url, PAYLOAD)[0])) for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(results) == [200] * 7 + [202]
     assert queued == ["123456"]
 
 

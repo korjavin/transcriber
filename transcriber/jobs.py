@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,10 +35,19 @@ def job_dir(job_id: str) -> Path:
 
 
 def _write_atomic(path: Path, payload: bytes) -> None:
+    # The tmp name must be unique: the receiver and the worker can write the same
+    # job.json at once, and a shared tmp name makes one of them fail the rename.
+    # ponytail: rename-atomic, not crash-durable — a power cut can leave an empty
+    # job.json (list_unfinished skips unparseable ones). fsync here if that ever bites.
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_bytes(payload)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(payload)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def save_job(job: dict) -> None:
