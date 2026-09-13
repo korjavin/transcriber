@@ -1,10 +1,14 @@
 """Receiver tests over a real loopback socket — no network, no framework, no mocks of HTTP."""
 
 import json
+import logging
+import socket
+import struct
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
-from http.server import ThreadingHTTPServer
 
 import pytest
 
@@ -35,7 +39,7 @@ def data_dir(tmp_path, monkeypatch):
 @pytest.fixture
 def url(queued):
     handler = server.make_handler(SECRET, queued.append)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd = server.Server(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield f"http://127.0.0.1:{httpd.server_address[1]}"
     httpd.shutdown()
@@ -87,7 +91,7 @@ def test_absent_signature_header_is_401(url, queued):
 
 def test_empty_secret_never_authorizes(queued):
     handler = server.make_handler("", queued.append)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    httpd = server.Server(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
         base = f"http://127.0.0.1:{httpd.server_address[1]}"
@@ -104,7 +108,7 @@ def test_failure_while_accepting_answers_500():
     def boom(job_id):
         raise RuntimeError("queue is gone")
 
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.make_handler(SECRET, boom))
+    httpd = server.Server(("127.0.0.1", 0), server.make_handler(SECRET, boom))
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     try:
         status, reply = post(f"http://127.0.0.1:{httpd.server_address[1]}", PAYLOAD)
@@ -225,3 +229,25 @@ def test_failed_job_is_requeued(url, queued):
 
     assert queued == ["123456", "123456"]
     assert jobs.load_job("123456")["state"] == "queued"
+
+
+def test_a_reset_connection_logs_one_debug_line_and_no_traceback(url, caplog, capsys):
+    """Traefik's health probes reset the connection; the stdlib default dumps a
+    traceback per reset. Only a DEBUG line may survive."""
+    caplog.set_level(logging.DEBUG)
+    parts = urllib.parse.urlsplit(url)
+    with socket.create_connection((parts.hostname, parts.port), timeout=5) as sock:
+        sock.sendall(
+            b"POST /webhook HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\npartial"
+        )
+        # SO_LINGER 0: close with an RST, which is what a dropped probe looks like.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and "dropped the connection" not in caplog.text:
+        time.sleep(0.05)
+
+    assert "dropped the connection" in caplog.text
+    assert [r.levelname for r in caplog.records if "dropped" in r.message] == ["DEBUG"]
+    assert not [r for r in caplog.records if r.levelno > logging.INFO or r.exc_info]
+    assert "Traceback" not in capsys.readouterr().err

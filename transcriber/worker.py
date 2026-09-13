@@ -20,6 +20,9 @@ from transcriber import transcribe as transcribe_module
 
 log = logging.getLogger(__name__)
 
+# A silent recording still gets a document, so the user learns the call had no speech.
+NO_SPEECH = "*No speech detected.*"
+
 
 def run_job(
     job_id: str,
@@ -60,9 +63,13 @@ def run_job(
                     segments = tracks.coalesce(transcribe_tracks(rebased, transcribe))
                 else:
                     segments = transcribe(jobs.rebase_path(webhook["audio_path"]))
+                markdown = transcribe_module.to_markdown(segments)
+                if not markdown:
+                    log.info("job %s: no speech detected", job_id)
+                    markdown = NO_SPEECH
                 # jobs' atomic writer: a half-written transcript.md would be read back as
                 # the finished text by the very next resume.
-                jobs._write_atomic(transcript, transcribe_module.to_markdown(segments).encode())
+                jobs._write_atomic(transcript, markdown.encode())
                 log.info(
                     "job %s: transcription finished (%.1fs, %d segments)",
                     job_id,

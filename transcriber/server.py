@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -187,6 +188,21 @@ def make_handler(secret: str, on_job: Callable[[str], None]) -> type[BaseHTTPReq
     return Handler
 
 
-def serve(port: int, handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
+class Server(ThreadingHTTPServer):
+    """ThreadingHTTPServer that logs failures instead of dumping tracebacks to stderr.
+
+    Traefik's health probes reset the connection routinely, and the stdlib default
+    prints a full traceback per reset, which buries the real log.
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, TimeoutError)):
+            log.debug("client %s dropped the connection: %s", client_address, exc)
+        else:
+            log.exception("error handling request from %s", client_address)
+
+
+def serve(port: int, handler: type[BaseHTTPRequestHandler]) -> Server:
     """Bound server on every interface; the caller runs serve_forever()."""
-    return ThreadingHTTPServer(("0.0.0.0", port), handler)
+    return Server(("0.0.0.0", port), handler)
