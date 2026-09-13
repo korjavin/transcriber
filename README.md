@@ -187,8 +187,11 @@ for installations where tr2outline is unavailable or unwanted.
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `WEBHOOK_SECRET` | yes | — | Shared secret with jitsi-capture: verifies the incoming webhook and signs the callback |
-| `DATA_DIR` | no | `/data` | Shared audio volume (same path as in jitsi-capture) |
+| `DATA_DIR` | no | `/data` | Shared audio volume inside the container (same path as in jitsi-capture) |
+| `HOST_DATA_DIR` | no | = `DATA_DIR` | Host path of that volume; incoming paths are rebased `HOST_DATA_DIR` → `DATA_DIR` |
+| `PORT` | no | `8080` | Port the receiver listens on |
 | `ASR_ENGINE` | no | `parakeet` | `parakeet` (onnx-asr) or `whisper` (faster-whisper) |
+| `MODEL_DIR` | no | `/models` | Model cache: onnx-asr model dir and `HF_HOME` for whisper |
 | `WHISPER_MODEL` | no | `large-v3` | faster-whisper model |
 | `WHISPER_DEVICE` | no | `cpu` | faster-whisper device |
 | `WHISPER_COMPUTE_TYPE` | no | `int8` | faster-whisper compute type |
@@ -198,6 +201,7 @@ for installations where tr2outline is unavailable or unwanted.
 | `OUTLINE_BASE_URL` | no | — | Fallback path: Outline base URL |
 | `OUTLINE_API_KEY` | no | — | Fallback path: Outline API token |
 | `OUTLINE_COLLECTION_ID` | no | — | Fallback path: Outline collection UUID |
+| `LOG_LEVEL` | no | `INFO` | Stdlib logging level |
 
 Configuration is env-vars **only**. `.env` is gitignored; `.env.example` holds
 placeholders exclusively. Logs print the **name** of a variable, never its
@@ -222,18 +226,64 @@ The tests shadow `faster_whisper` and `requests` with fakes, so they pass with
 no network and no model downloads. CI (GitHub Actions, Python 3.12) runs exactly
 these two commands on every push to `master` and on every pull request.
 
-**Docker:** TODO — the image lands together with the HTTP receiver.
+**Docker:** build and run the image locally with the same env file the stack uses:
+
+```bash
+cp .env.example .env        # then fill in the secrets
+docker build -t transcriber .
+docker run --rm -p 8080:8080 --env-file .env \
+  -v "$HOST_DATA_DIR:/data" -v transcriber-models:/models transcriber
+```
+
+The image carries no ASR model: the first transcription downloads it (~1-2 GB)
+into `MODEL_DIR`, which is why `/models` is a named volume — otherwise every
+container restart re-downloads it.
+
+---
+
+## 🚢 Deploy
+
+One image, one compose stack. `docker-compose.yml` is written for Portainer but
+runs the same under plain `docker compose up -d`:
+
+```bash
+cp .env.example .env        # fill in the secrets, set HOST_DATA_DIR
+docker compose up -d
+```
+
+**Networking.** transcriber, jitsi-capture and tr2outline share a Docker network
+and address each other by service name:
+
+* jitsi-capture's `WEBHOOK_URL` → `http://transcriber:8080/webhook`
+* transcriber's `TR2OUTLINE_URL` → tr2outline's Anarlog endpoint
+* transcriber's callback target arrives in the webhook (`callback_url`, jitsi-capture's `/notify`)
+
+**The shared audio volume.** `HOST_DATA_DIR` in `.env` must be the exact host
+directory jitsi-capture writes into, and both containers mount it at `/data`.
+jitsi-capture rebases `DATA_DIR` → `HOST_DATA_DIR` before sending a webhook and
+transcriber rebases back, so with the default identical mount path the rebase is
+a no-op.
+
+**Portainer stack.** In Portainer: *Stacks → Add stack → Repository*, point it at
+this repository with `docker-compose.yml` as the compose path, paste the contents
+of `.env.example` into the stack's environment variables (with real values), and
+deploy. Enable the stack's webhook and store its URL as the `PORTAINER_WEBHOOK_URL`
+repository secret — the redeploy step in `.github/workflows/ci.yml` is commented
+out until that secret exists.
+
+**Images.** CI builds the image on every pull request and, on push to `master`,
+pushes `ghcr.io/korjavin/transcriber:latest` and `:<sha>` to GHCR.
 
 ---
 
 ## 🗺️ Roadmap
 
-- [ ] HTTP receiver: `POST /webhook` (HMAC verification, job queue), `GET /health`
+- [x] HTTP receiver: `POST /webhook` (HMAC verification, job queue), `GET /health`
 - [ ] Parakeet-tdt-0.6b-v3 backend via onnx-asr (int8, CPU), `ASR_ENGINE` switch
-- [ ] Per-track segment merge by `offset_s` → a `Name: text` feed with timecodes
-- [ ] Anarlog-format webhook to tr2outline + parsing the document URL from the reply
-- [ ] `POST <callback_url>` callback with the signed Zulip message
-- [ ] Dockerfile + image build in CI (ghcr.io)
+- [x] Per-track segment merge by `offset_s` → a `Name: text` feed with timecodes
+- [x] Anarlog-format webhook to tr2outline + parsing the document URL from the reply
+- [x] `POST <callback_url>` callback with the signed Zulip message
+- [x] Dockerfile + image build in CI (ghcr.io)
 - [ ] Resilience: webhook retries, recovery across service restarts
 
 ---

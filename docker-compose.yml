@@ -1,0 +1,21 @@
+services:
+  transcriber:
+    image: ghcr.io/korjavin/transcriber:latest
+    restart: unless-stopped
+    env_file: .env
+    # Drop this block to keep the receiver reachable only on the shared Docker network.
+    ports:
+      - "8080:8080"
+    volumes:
+      # SAME host directory that jitsi-capture mounts as its DATA_DIR.
+      - ${HOST_DATA_DIR}:/data
+      # Models download on first run (~1-2 GB) and are cached here.
+      - transcriber-models:/models
+    deploy:
+      resources:
+        limits:
+          # Knob: int8 parakeet plus whisper-fallback headroom. Lower it if the host is tight.
+          memory: 6g
+
+volumes:
+  transcriber-models: {}
