@@ -48,6 +48,11 @@ SEGMENTS = {
     "mixed.webm": [Segment(2.0, 5.0, "hello everyone")],
 }
 
+# urllib falls back to the macOS system proxy once the env vars are gone, and
+# proxy_bypass() does not exempt 127.0.0.1: an explicit empty ProxyHandler keeps the
+# inbound webhook on loopback on a box that has one configured.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
 EXPECTED_FEED = (
     "[00:01] Alice: good morning shall we start\n"
     "[00:07] Bob: yes go ahead\n"
@@ -56,7 +61,12 @@ EXPECTED_FEED = (
 
 
 def fake_asr(audio_path: str) -> list[Segment]:
-    """Segments by file name — reading the file first, so an unrebased path fails here."""
+    """Segments by file name, read off disk first so a mis-rebased path is not silently fine.
+
+    The FileNotFoundError carries exactly the path tracks.py handed us, so a broken rebase
+    drops that track from the feed (or fails the job once every track is gone) — either way
+    the transcript assertion below is what catches it.
+    """
     Path(audio_path).read_bytes()
     return SEGMENTS[Path(audio_path).name]
 
@@ -135,7 +145,7 @@ def service(monkeypatch):
                     "x-jitsi-capture-signature": sign_body(body, SECRET),
                 },
             )
-            with urllib.request.urlopen(request, timeout=5) as response:
+            with OPENER.open(request, timeout=5) as response:
                 return response.status, json.loads(response.read())
 
         return post, tr2outline, notify
@@ -158,9 +168,21 @@ def test_tracked_call_reaches_tr2outline_and_the_ready_callback(tmp_path, servic
     headers, body = tr2outline.requests[0]
     assert headers["x-anarlog-event"] == "note.enhanced"
     assert verify_signature(body, headers["x-anarlog-signature"], ANARLOG_SECRET)
-    assert json.loads(body) == build_anarlog_payload(payload, EXPECTED_FEED)
+    # Proves the bytes on the wire are the payload built from the stored webhook and the
+    # finished transcript, unmodified by the sending code.
+    sent = json.loads(body)
+    assert sent == build_anarlog_payload(payload, EXPECTED_FEED)
+    # ...and the fields tr2outline actually reads, pinned to literals: the comparison above
+    # is production output against production output, so a change to the payload's shape
+    # would move both sides of it together.
+    meeting = sent["data"]["meeting"]
+    assert sent["id"] == meeting["id"] == JOB_ID
+    assert sent["event"] == "note.enhanced"
+    assert sent["created_at"] == "2026-09-13T12:30:20Z"  # the call's ended_at, not now
     # tr2outline prefixes the date itself, so the title we send is the Zulip topic alone.
-    assert json.loads(body)["data"]["meeting"]["title"] == payload["topic"]
+    assert meeting["title"] == payload["topic"] == "Weekly sync"
+    assert meeting["participants"] == ["Alice", "Bob"]
+    assert sent["data"]["transcript_text"] == EXPECTED_FEED
 
     headers, body = notify.requests[0]
     assert verify_signature(body, headers["x-jitsi-capture-signature"], SECRET)
