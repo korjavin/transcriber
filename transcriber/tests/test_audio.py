@@ -22,6 +22,19 @@ def test_missing_file_raises_before_importing_faster_whisper(monkeypatch, tmp_pa
     assert excinfo.value.filename == path
 
 
+def test_an_unreadable_file_is_not_reported_as_missing(monkeypatch, tmp_path):
+    # A permission error must stay a PermissionError. Reported as FileNotFoundError it would
+    # match the skip contract in transcriber.tracks, and that participant would vanish from
+    # the transcript while the job still reported success.
+    def denied(path):
+        raise PermissionError(13, "Permission denied", path)
+
+    monkeypatch.setattr(audio.os, "stat", denied)
+
+    with pytest.raises(PermissionError):
+        audio.decode(str(tmp_path / "locked.webm"))
+
+
 def test_decode_passes_path_and_sample_rate(monkeypatch, tmp_path):
     calls = []
     module = types.ModuleType("faster_whisper.audio")

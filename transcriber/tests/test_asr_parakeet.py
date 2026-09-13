@@ -17,21 +17,13 @@ class FakeSegmentResult:
         self.start, self.end, self.text = start, end, text
 
 
-class FakeModel:
-    """Stands in for the onnx-asr adapter: load_model(...).with_vad(vad).recognize(...)."""
+class FakeVadModel:
+    """What with_vad() really returns: a separate adapter, not the model it came from."""
 
-    loads: ClassVar[list] = []
-    vads: ClassVar[list] = []
-
-    def __init__(self, args, kwargs):
-        FakeModel.loads.append((args, kwargs))
-        self.vad = None
-        self.calls = []
-
-    def with_vad(self, vad):
+    def __init__(self, asr, vad):
+        self.asr = asr
         self.vad = vad
-        FakeModel.vads.append(vad)
-        return self
+        self.calls = []
 
     def recognize(self, waveform, **kwargs):
         self.calls.append((waveform, kwargs))
@@ -41,6 +33,25 @@ class FakeModel:
                 FakeSegmentResult(9.0, 12.0, "world"),
             ]
         )
+
+
+class FakeModel:
+    """Stands in for the onnx-asr adapter: load_model(...).with_vad(vad).recognize(...)."""
+
+    loads: ClassVar[list] = []
+    vads: ClassVar[list] = []
+
+    def __init__(self, args, kwargs):
+        FakeModel.loads.append((args, kwargs))
+
+    def with_vad(self, vad):
+        FakeModel.vads.append(vad)
+        return FakeVadModel(self, vad)
+
+    def recognize(self, waveform, **kwargs):
+        # Keeping this model instead of what with_vad() returned means no VAD at all, and
+        # the real adapter would hand back a plain string here rather than segments.
+        raise AssertionError("recognize() reached the model: with_vad()'s return was dropped")
 
 
 @pytest.fixture(autouse=True)

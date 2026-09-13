@@ -5,7 +5,6 @@ PyAV ships with faster-whisper, so decoding needs no ffmpeg binary in the image.
 
 from __future__ import annotations
 
-import errno
 import os
 from typing import TYPE_CHECKING
 
@@ -17,10 +16,12 @@ SAMPLE_RATE = 16000
 
 def decode(path: str) -> np.ndarray:
     """Decode an audio file (WebM/Opus included) to a float32 mono 16 kHz waveform."""
-    if not os.path.exists(path):
-        # PyAV's own "not found" carries no filename, and transcriber.tracks skips a track
-        # only on a FileNotFoundError whose .filename is that track's path, as open() raises.
-        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), path)
+    # Check the file before a ~1 GB model load, and let os.stat do it rather than
+    # os.path.exists: exists() answers False for a permission error too, which
+    # transcriber.tracks would read as "this participant's track is missing" and quietly
+    # drop them from the transcript. os.stat raises FileNotFoundError with .filename set —
+    # the shape tracks.py needs — for a genuine ENOENT, and the true error otherwise.
+    os.stat(path)
     # ponytail: PyAV via faster-whisper is already installed; swap for an
     # `ffmpeg -f f32le -ac 1 -ar 16000` subprocess only if faster-whisper is dropped.
     # Lazy import so that importing this module pulls in neither PyAV nor numpy.
