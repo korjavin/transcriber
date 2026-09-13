@@ -21,8 +21,9 @@ def transcribe_tracks(
     """Transcribe every track and merge the segments into one feed, sorted by start time.
 
     `tracks` are the webhook's `tracks[]` items with `path` already rebased by the
-    caller — this module does no path or environment work. A track whose audio is
-    missing is skipped; any other transcription error propagates and fails the job.
+    caller — this module does no path or environment work. A track whose own audio is
+    missing is skipped; any other transcription error propagates and fails the job, as
+    does losing every track (broken input beats an empty transcript).
     """
     merged: list[Segment] = []
     missing = 0
