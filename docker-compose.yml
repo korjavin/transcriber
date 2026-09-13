@@ -2,13 +2,20 @@ services:
   transcriber:
     image: ghcr.io/korjavin/transcriber:latest
     restart: unless-stopped
-    env_file: .env
-    # Drop this block to keep the receiver reachable only on the shared Docker network.
+    env_file:
+      # Optional: Portainer passes the stack's variables as env and never writes
+      # a .env into the clone, so requiring the file would break that deploy.
+      - path: .env
+        required: false
+    # Drop this block to keep the receiver reachable only on the shared network.
     ports:
       - "8080:8080"
+    networks:
+      - transcriber
     volumes:
       # SAME host directory that jitsi-capture mounts as its DATA_DIR.
-      - ${HOST_DATA_DIR}:/data
+      # It must be writable by uid 10001 (the container runs as a non-root user).
+      - ${HOST_DATA_DIR:?set HOST_DATA_DIR in .env}:/data
       # Models download on first run (~1-2 GB) and are cached here.
       - transcriber-models:/models
     deploy:
@@ -16,6 +23,12 @@ services:
         limits:
           # Knob: int8 parakeet plus whisper-fallback headroom. Lower it if the host is tight.
           memory: 6g
+
+networks:
+  transcriber:
+    # Fixed name, no stack prefix: jitsi-capture and tr2outline join this network
+    # as external and reach the receiver at http://transcriber:8080.
+    name: transcriber
 
 volumes:
   transcriber-models: {}

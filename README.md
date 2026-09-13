@@ -232,8 +232,11 @@ these two commands on every push to `master` and on every pull request.
 cp .env.example .env        # then fill in the secrets
 docker build -t transcriber .
 docker run --rm -p 8080:8080 --env-file .env \
-  -v "$HOST_DATA_DIR:/data" -v transcriber-models:/models transcriber
+  -v /srv/jitsi-capture/data:/data -v transcriber-models:/models transcriber
 ```
+
+Replace `/srv/jitsi-capture/data` with your own `HOST_DATA_DIR` — `--env-file`
+sets it inside the container, not in the shell that writes the `-v` flag.
 
 The image carries no ASR model: the first transcription downloads it (~1-2 GB)
 into `MODEL_DIR`, which is why `/models` is a named volume — otherwise every
@@ -251,18 +254,38 @@ cp .env.example .env        # fill in the secrets, set HOST_DATA_DIR
 docker compose up -d
 ```
 
-**Networking.** transcriber, jitsi-capture and tr2outline share a Docker network
-and address each other by service name:
+**Networking.** The stack creates a Docker network literally named `transcriber`
+(no stack prefix), and the three services address each other by service name:
 
 * jitsi-capture's `WEBHOOK_URL` → `http://transcriber:8080/webhook`
 * transcriber's `TR2OUTLINE_URL` → tr2outline's Anarlog endpoint
 * transcriber's callback target arrives in the webhook (`callback_url`, jitsi-capture's `/notify`)
+
+Deploy this stack first, then attach the other two to the same network — service
+name resolution only works across stacks when they share one:
+
+```yaml
+services:
+  jitsi-capture:
+    networks: [transcriber]
+networks:
+  transcriber:
+    external: true
+```
 
 **The shared audio volume.** `HOST_DATA_DIR` in `.env` must be the exact host
 directory jitsi-capture writes into, and both containers mount it at `/data`.
 jitsi-capture rebases `DATA_DIR` → `HOST_DATA_DIR` before sending a webhook and
 transcriber rebases back, so with the default identical mount path the rebase is
 a no-op.
+
+The container runs as a non-root user (uid `10001`) and writes job state under
+`DATA_DIR/transcriber/`, so the host directory must be writable by it — Docker
+never chowns a bind mount:
+
+```bash
+sudo chown -R 10001 "$HOST_DATA_DIR"   # or give it a group both services share
+```
 
 **Portainer stack.** In Portainer: *Stacks → Add stack → Repository*, point it at
 this repository with `docker-compose.yml` as the compose path, paste the contents
