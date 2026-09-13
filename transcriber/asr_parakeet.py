@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 
 from transcriber import audio
 from transcriber.transcribe import Segment
@@ -15,6 +16,11 @@ log = logging.getLogger(__name__)
 
 MODEL_NAME = "nemo-parakeet-tdt-0.6b-v3"
 MODEL_SUBDIR = "parakeet-tdt-0.6b-v3"
+VAD_NAME = "silero"
+# The VAD gets its own subdirectory of MODEL_DIR so that the whole volume is self-contained:
+# left pathless it would land in the default Hugging Face cache and be re-fetched from the
+# network on every cold start, which also means no start at all when the hub is unreachable.
+VAD_SUBDIR = "silero-vad"
 # CPU inference is the owner's decision, so say so instead of taking onnxruntime's default
 # provider list: on a macOS dev box that list starts with CoreML, which hands the graph to
 # the Neural Engine and gets the process killed. The deployed Linux image has CPU only.
@@ -26,6 +32,24 @@ PROVIDERS = ["CPUExecutionProvider"]
 _MODEL = None
 
 
+def _load(loader, name: str, path: str, **kwargs):
+    """Load one model from `path`, downloading it there on first use.
+
+    Never pre-create `path`: onnx-asr reads an existing local directory as a complete
+    offline copy and then never downloads into it. That same rule is why a download killed
+    part-way — a restarted container — would otherwise leave a half-filled directory that
+    fails every subsequent start forever, so an incomplete one is cleared and fetched again.
+    """
+    try:
+        return loader(name, path, **kwargs)
+    except FileNotFoundError:
+        if not os.path.exists(path):
+            raise
+        log.warning("model directory %s is incomplete, clearing it and downloading again", path)
+        shutil.rmtree(path, ignore_errors=True)
+        return loader(name, path, **kwargs)
+
+
 def _get_model():
     """Load the model once per process, downloading it into MODEL_DIR on first use."""
     global _MODEL
@@ -33,15 +57,21 @@ def _get_model():
         # Lazy import: importing this module must not pull onnxruntime in.
         import onnx_asr
 
-        path = os.path.join(os.getenv("MODEL_DIR") or "/models", MODEL_SUBDIR)
-        # Do not pre-create that directory: onnx-asr reads an existing local dir as a
-        # complete offline model and then never downloads into it.
+        root = os.getenv("MODEL_DIR") or "/models"
         log.info("loading %s (int8) from MODEL_DIR subdirectory %s", MODEL_NAME, MODEL_SUBDIR)
+        asr = _load(
+            onnx_asr.load_model,
+            MODEL_NAME,
+            os.path.join(root, MODEL_SUBDIR),
+            quantization="int8",
+            providers=PROVIDERS,
+        )
         # VAD is mandatory, not a nicety: the model tops out at ~20-30 s of audio per
         # chunk while calls run for minutes.
-        _MODEL = onnx_asr.load_model(
-            MODEL_NAME, path, quantization="int8", providers=PROVIDERS
-        ).with_vad(onnx_asr.load_vad("silero", providers=PROVIDERS))
+        vad = _load(
+            onnx_asr.load_vad, VAD_NAME, os.path.join(root, VAD_SUBDIR), providers=PROVIDERS
+        )
+        _MODEL = asr.with_vad(vad)
     return _MODEL
 
 

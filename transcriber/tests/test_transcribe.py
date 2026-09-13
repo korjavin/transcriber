@@ -108,10 +108,18 @@ def routed(monkeypatch):
     return calls
 
 
-def test_engine_defaults_to_parakeet(routed, monkeypatch):
+def test_engine_defaults_to_parakeet(monkeypatch):
+    # Patched on the real module rather than a sys.modules fake, so the dispatcher's own
+    # import line runs: a circular import between these two modules would fail here.
+    calls = []
+    monkeypatch.setattr(
+        "transcriber.asr_parakeet.transcribe_parakeet", lambda path: calls.append(path)
+    )
     monkeypatch.delenv("ASR_ENGINE", raising=False)
+
     t.transcribe("call.webm")
-    assert routed == [("parakeet", "call.webm", {})]
+
+    assert calls == ["call.webm"]
 
 
 def test_env_selects_whisper(routed, monkeypatch):
@@ -160,6 +168,11 @@ def test_to_markdown_empty():
 
 
 def test_import_does_not_need_or_construct_a_model(monkeypatch):
+    import transcriber
+
+    # Re-importing rebinds the submodule on the package too, and `from a.b import c` reads
+    # that attribute in preference to sys.modules, so put the real one back afterwards.
+    monkeypatch.setattr(transcriber, "transcribe", t)
     # sys.modules[name] = None makes `import name` raise ImportError.
     monkeypatch.setitem(sys.modules, "faster_whisper", None)
     monkeypatch.delitem(sys.modules, "transcriber.transcribe")

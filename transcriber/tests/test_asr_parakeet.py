@@ -47,7 +47,7 @@ class FakeModel:
 def fake_onnx_asr(monkeypatch, tmp_path):
     module = types.ModuleType("onnx_asr")
     module.load_model = lambda *args, **kwargs: FakeModel(args, kwargs)
-    module.load_vad = lambda name, **kwargs: f"vad:{name}:{kwargs.get('providers')}"
+    module.load_vad = lambda name, path=None, **kwargs: f"vad:{name}:{path}:{kwargs.get('providers')}"
     monkeypatch.setitem(sys.modules, "onnx_asr", module)
     monkeypatch.setattr(p, "_MODEL", None)
     monkeypatch.setenv("MODEL_DIR", str(tmp_path))
@@ -85,9 +85,11 @@ def test_model_is_loaded_once_with_int8_and_vad(decoded, tmp_path):
             {"quantization": "int8", "providers": ["CPUExecutionProvider"]},
         )
     ]
-    # Both graphs must stay on the CPU provider, the VAD's included.
-    assert FakeModel.vads == ["vad:silero:['CPUExecutionProvider']"]
-    assert p._MODEL.vad == "vad:silero:['CPUExecutionProvider']"
+    # The VAD lives on the same volume, so a cold start needs no network, and both graphs
+    # must stay on the CPU provider.
+    vad = f"vad:silero:{os.path.join(str(tmp_path), 'silero-vad')}:['CPUExecutionProvider']"
+    assert FakeModel.vads == [vad]
+    assert p._MODEL.vad == vad
 
 
 def test_model_dir_defaults_to_models(decoded, monkeypatch):
@@ -101,6 +103,40 @@ def test_model_dir_is_not_pre_created(decoded, tmp_path):
     # and never download it, so the first load must find the path absent.
     p.transcribe_parakeet("call.webm")
     assert not (tmp_path / "parakeet-tdt-0.6b-v3").exists()
+    assert not (tmp_path / "silero-vad").exists()
+
+
+def test_an_incomplete_model_dir_is_cleared_and_downloaded_again(monkeypatch, tmp_path):
+    # A download killed part-way (a restarted container) leaves the directory present but
+    # half-filled. onnx-asr would then read it as a complete offline copy and fail every
+    # start from then on, so the load has to clear it and fetch again rather than give up.
+    partial = tmp_path / "parakeet-tdt-0.6b-v3"
+    partial.mkdir()
+    (partial / "encoder-model.int8.onnx.incomplete").write_bytes(b"half a model")
+    attempts = []
+
+    def loader(name, path, **kwargs):
+        attempts.append(os.path.exists(path))
+        if len(attempts) == 1:
+            raise FileNotFoundError(f"File 'encoder-model.int8.onnx' not found in path {path!r}")
+        return "loaded"
+
+    assert p._load(loader, "nemo", str(partial)) == "loaded"
+    # First attempt saw the stale directory, the retry saw it gone.
+    assert attempts == [True, False]
+
+
+def test_a_missing_model_dir_does_not_retry(tmp_path):
+    # Nothing to clear means nothing to heal: the real failure must surface, not be retried.
+    attempts = []
+
+    def loader(name, path, **kwargs):
+        attempts.append(path)
+        raise FileNotFoundError("the hub is unreachable")
+
+    with pytest.raises(FileNotFoundError):
+        p._load(loader, "nemo", str(tmp_path / "absent"))
+    assert len(attempts) == 1
 
 
 def test_missing_audio_fails_before_the_model_is_loaded(tmp_path):
@@ -114,6 +150,13 @@ def test_missing_audio_fails_before_the_model_is_loaded(tmp_path):
 
 
 def test_import_does_not_need_onnx_asr_or_construct_a_model(monkeypatch):
+    import transcriber
+
+    # Re-importing rebinds the submodule on the package too, and `from a.b import c` reads
+    # that attribute in preference to sys.modules. Without this the throwaway module below
+    # would leak into every later test that imports this one lazily.
+    monkeypatch.setattr(transcriber, "asr_parakeet", p)
+    # sys.modules[name] = None makes `import name` raise ImportError.
     monkeypatch.setitem(sys.modules, "onnx_asr", None)
     monkeypatch.delitem(sys.modules, "transcriber.asr_parakeet")
 
