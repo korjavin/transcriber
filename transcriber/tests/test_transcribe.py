@@ -40,6 +40,8 @@ def fake_whisper(monkeypatch):
     FakeModel.instances.clear()
     for name in WHISPER_ENV:
         monkeypatch.delenv(name, raising=False)
+    # This file is about the whisper backend; parakeet is the default engine elsewhere.
+    monkeypatch.setenv("ASR_ENGINE", "whisper")
 
 
 def seg(start, text="x", end=None):
@@ -91,6 +93,54 @@ def test_model_is_cached_per_configuration():
 
     t.transcribe("c.webm", model="small")
     assert len(FakeModel.instances) == 2
+
+
+@pytest.fixture
+def routed(monkeypatch):
+    """Record which backend transcribe() dispatched to, without running either."""
+    calls = []
+    monkeypatch.setattr(
+        t, "transcribe_whisper", lambda path, **kw: calls.append(("whisper", path, kw))
+    )
+    module = types.ModuleType("transcriber.asr_parakeet")
+    module.transcribe_parakeet = lambda path, **kw: calls.append(("parakeet", path, kw))
+    monkeypatch.setitem(sys.modules, "transcriber.asr_parakeet", module)
+    return calls
+
+
+def test_engine_defaults_to_parakeet(routed, monkeypatch):
+    monkeypatch.delenv("ASR_ENGINE", raising=False)
+    t.transcribe("call.webm")
+    assert routed == [("parakeet", "call.webm", {})]
+
+
+def test_env_selects_whisper(routed, monkeypatch):
+    monkeypatch.setenv("ASR_ENGINE", "whisper")
+    t.transcribe("call.webm", model="small")
+    assert routed == [("whisper", "call.webm", {"model": "small"})]
+
+
+def test_engine_argument_beats_env(routed, monkeypatch):
+    monkeypatch.setenv("ASR_ENGINE", "whisper")
+    t.transcribe("call.webm", engine="parakeet")
+    assert routed == [("parakeet", "call.webm", {})]
+
+
+def test_unknown_engine_raises(routed, monkeypatch):
+    monkeypatch.setenv("ASR_ENGINE", "vosk")
+    with pytest.raises(ValueError, match="vosk"):
+        t.transcribe("call.webm")
+    assert routed == []
+
+
+def test_whisper_options_are_rejected_by_parakeet(monkeypatch):
+    monkeypatch.delenv("ASR_ENGINE", raising=False)
+    module = types.ModuleType("transcriber.asr_parakeet")
+    module.transcribe_parakeet = lambda path: []
+    monkeypatch.setitem(sys.modules, "transcriber.asr_parakeet", module)
+
+    with pytest.raises(TypeError):
+        t.transcribe("call.webm", model="small")
 
 
 def test_to_markdown_timecodes():
