@@ -63,9 +63,10 @@ Body:
 ```
 
 `tracks[]` is optional — it only appears once per-participant recording lands in
-jitsi-capture, so the code must work without it.
+jitsi-capture, so the code must work without it. `speaker_hints_path` is optional
+too: Google Meet jobs only (see Speaker attribution).
 
-Files at `audio_path` and `tracks[].path` are read directly: both services mount
+Files at `audio_path`, `tracks[].path` and `speaker_hints_path` are read directly: both services mount
 the same volume at `DATA_DIR`, so nothing is copied over the network.
 
 ---
@@ -107,10 +108,15 @@ recording.
   This is more accurate than any diarization over the mixed audio and costs the
   same compute (total track duration ≈ call duration).
 
-* **When there are no tracks** — the mixed `audio_path` is transcribed and the
-  feed carries no names; as a fallback the dominant speaker's name may be taken
-  from the participant timeline. This is deliberately weaker — per-track is the
-  default path.
+* **Google Meet (`speaker_hints_path`)** — Meet gives one mixed file, so the
+  mixed `audio_path` is transcribed and each segment is named after the caption
+  speaker whose window `[offset_s, next offset_s)` overlaps it most (the last
+  one runs to the end). The JSONL file (`{"offset_s", "speaker", "text"}` per
+  line) only supplies names — the text still comes from the audio; Meet's `?`
+  means no name. An unreadable hints file costs the names, never the job.
+
+* **When there are no tracks and no hints** — the mixed `audio_path` is
+  transcribed and the feed carries no names.
 
 ---
 

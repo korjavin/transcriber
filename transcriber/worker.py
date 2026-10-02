@@ -63,6 +63,8 @@ def run_job(
                     segments = tracks.coalesce(transcribe_tracks(rebased, transcribe))
                 else:
                     segments = transcribe(jobs.rebase_path(webhook["audio_path"]))
+                    if webhook.get("speaker_hints_path"):
+                        segments = tracks.coalesce(_name_speakers(job_id, webhook, segments))
                 markdown = transcribe_module.to_markdown(segments)
                 if not markdown:
                     log.info("job %s: no speech detected", job_id)
@@ -93,6 +95,21 @@ def run_job(
         # Bounded: the text lands in job.json. publish keeps secrets out of its exceptions;
         # paths are fine here.
         jobs.set_state(job_id, "failed", error=f"{stage}: {type(exc).__name__}: {exc}"[:500])
+
+
+def _name_speakers(job_id: str, webhook: dict, segments: list) -> list:
+    """Attach Meet caption speaker names to mixed-audio segments.
+
+    The hints only name speakers, so an unreadable hints file costs the names, never
+    the transcript: warn and keep the segments unnamed.
+    """
+    try:
+        hints = tracks.load_hints(jobs.rebase_path(webhook["speaker_hints_path"]))
+    except (OSError, ValueError, TypeError) as exc:
+        log.warning("job %s: speaker hints unusable, no names: %s", job_id, exc)
+        return segments
+    log.info("job %s: naming speakers from %d hints", job_id, len(hints))
+    return tracks.apply_hints(segments, hints)
 
 
 class Worker:

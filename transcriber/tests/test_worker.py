@@ -316,3 +316,44 @@ def test_main_exits_2_and_names_the_missing_variable(monkeypatch, caplog):
     assert main() == 2
     assert "ANARLOG_WEBHOOK_SECRET" in caplog.text
     assert "change-me" not in caplog.text
+
+
+def _run_mixed(tmp_path, segments, **webhook):
+    make_job(tmp_path, webhook=webhook)
+    seen = {}
+
+    def send(payload):
+        seen["text"] = payload["data"]["transcript_text"]
+        return "https://outline.example/doc/abc", "t"
+
+    worker.run_job(
+        JOB_ID,
+        transcribe=lambda _path: segments,
+        transcribe_tracks=boom,
+        send=send,
+        callback=lambda *_a: None,
+    )
+    assert jobs.load_job(JOB_ID)["state"] == "done"
+    return seen["text"]
+
+
+def test_meet_speaker_hints_name_the_mixed_transcript(tmp_path):
+    hints = tmp_path / "hints.jsonl"
+    hints.write_text(
+        '{"offset_s": 0.0, "speaker": "Alice", "text": "caption"}\n'
+        '{"offset_s": 5.0, "speaker": "Bob", "text": "caption"}\n'
+    )
+    text = _run_mixed(
+        tmp_path,
+        [Segment(0.0, 2.0, "hello"), Segment(2.5, 4.0, "there"), Segment(6.0, 8.0, "hi")],
+        speaker_hints_path=str(hints),
+    )
+    # Names from the hints, text from the audio, same-speaker turns joined.
+    assert text == "[00:00] Alice: hello there\n[00:06] Bob: hi"
+
+
+def test_unreadable_speaker_hints_keep_the_unnamed_transcript(tmp_path):
+    text = _run_mixed(
+        tmp_path, [Segment(0.0, 2.0, "hello")], speaker_hints_path=str(tmp_path / "missing")
+    )
+    assert text == "[00:00] hello"

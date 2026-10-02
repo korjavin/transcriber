@@ -200,3 +200,38 @@ def test_segments_without_a_speaker_are_never_joined():
 
 def test_coalesce_empty():
     assert coalesce([]) == []
+
+
+def test_hints_name_segments_by_largest_overlap(tmp_path):
+    from transcriber.tracks import apply_hints, load_hints
+
+    hints_file = tmp_path / "hints.jsonl"
+    hints_file.write_text(
+        '{"offset_s": 0.0, "speaker": "Alice", "text": "hi"}\n'
+        "not json\n"
+        '{"offset_s": 4.0, "speaker": "Bob", "text": "yo"}\n'
+        '{"offset_s": 10.0, "speaker": "?", "text": "..."}\n'
+        '{"offset_s": 12.0, "speaker": "Alice", "text": "bye"}\n'
+    )
+    hints = load_hints(str(hints_file))
+    assert hints == [(0.0, "Alice"), (4.0, "Bob"), (10.0, "?"), (12.0, "Alice")]
+
+    named = apply_hints(
+        [
+            Segment(0.5, 3.0, "a"),  # inside Alice
+            Segment(3.0, 9.0, "b"),  # 1s Alice, 5s Bob
+            Segment(9.5, 11.5, "c"),  # mostly '?' -> unnamed
+            Segment(30.0, 40.0, "d"),  # last hint runs to the end of the audio
+            Segment(5.0, 5.0, "e"),  # zero-length: the hint covering its start
+        ],
+        hints,
+    )
+    assert [s.speaker for s in named] == ["Alice", "Bob", None, "Alice", "Bob"]
+    assert [s.text for s in named] == ["a", "b", "c", "d", "e"]
+
+
+def test_segment_before_first_hint_and_no_hints_stay_unnamed():
+    from transcriber.tracks import apply_hints
+
+    assert apply_hints([Segment(0.0, 1.0, "x")], [(2.0, "Alice")])[0].speaker is None
+    assert apply_hints([Segment(0.0, 1.0, "x")], [])[0].speaker is None

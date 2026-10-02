@@ -3,11 +3,17 @@
 No diarization: jitsi-capture records one file per participant, so the speaker's
 name comes straight from the track. Each track is transcribed on its own, shifted
 by the participant's `offset_s` and merged back by time.
+
+Google Meet has no per-participant tracks, only one mixed file; there the names come
+from Meet's caption timeline (`speaker_hints_path`) laid over the mixed transcript.
 """
 
 from __future__ import annotations
 
+import bisect
+import json
 import logging
+import math
 from collections.abc import Callable
 
 from transcriber.transcribe import Segment
@@ -77,3 +83,50 @@ def coalesce(segments: list[Segment], gap_s: float = 2.0) -> list[Segment]:
         else:
             turns.append(s)
     return turns
+
+
+def load_hints(path: str) -> list[tuple[float, str]]:
+    """Read a Meet `speaker_hints_path` JSONL file into (offset_s, speaker) pairs.
+
+    One `{"offset_s", "speaker", "text"}` object per line; only offset and name are used
+    (the text still comes from the audio). Unusable lines are skipped. Sorted by offset.
+    """
+    hints = []
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                hint = json.loads(line)
+                offset, speaker = float(hint["offset_s"]), hint["speaker"]
+            except (ValueError, TypeError, KeyError, RecursionError):
+                continue
+            if isinstance(speaker, str) and math.isfinite(offset):
+                hints.append((offset, speaker.strip()))
+    hints.sort(key=lambda h: h[0])  # stable: equal offsets keep file order
+    return hints
+
+
+def apply_hints(segments: list[Segment], hints: list[tuple[float, str]]) -> list[Segment]:
+    """Name each segment after the hint whose window overlaps it most.
+
+    Hint i covers [offset_i, offset_{i+1}); the last one runs to the end of the audio.
+    A segment with no overlap (zero-length, say) takes the hint covering its start.
+    Meet's '?' (or an empty name) means no name, and so does a segment before the
+    first hint. Pure function.
+    """
+    offsets = [h[0] for h in hints]
+    named = []
+    for s in segments:
+        best, best_overlap = None, 0.0
+        first = max(bisect.bisect_right(offsets, s.start) - 1, 0)
+        for i in range(first, bisect.bisect_left(offsets, s.end)):
+            win_end = offsets[i + 1] if i + 1 < len(offsets) else math.inf
+            overlap = min(s.end, win_end) - max(s.start, offsets[i])
+            if overlap > best_overlap:
+                best, best_overlap = i, overlap
+        if best is None and offsets and offsets[0] <= s.start:
+            best = bisect.bisect_right(offsets, s.start) - 1
+        speaker = hints[best][1] if best is not None else ""
+        named.append(
+            Segment(s.start, s.end, s.text, speaker=speaker if speaker not in ("", "?") else None)
+        )
+    return named
