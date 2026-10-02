@@ -97,7 +97,7 @@ def load_hints(path: str) -> list[tuple[float, str]]:
             try:
                 hint = json.loads(line)
                 offset, speaker = float(hint["offset_s"]), hint["speaker"]
-            except (ValueError, TypeError, KeyError, RecursionError):
+            except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
                 continue
             if isinstance(speaker, str) and math.isfinite(offset):
                 hints.append((offset, speaker.strip()))

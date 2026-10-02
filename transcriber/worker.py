@@ -103,8 +103,11 @@ def _name_speakers(job_id: str, webhook: dict, segments: list) -> list:
     The hints only name speakers, so an unreadable hints file costs the names, never
     the transcript: warn and keep the segments unnamed.
     """
+    path = webhook["speaker_hints_path"]
     try:
-        hints = tracks.load_hints(jobs.rebase_path(webhook["speaker_hints_path"]))
+        if not isinstance(path, str):
+            raise TypeError(f"speaker_hints_path is {type(path).__name__}, not a string")
+        hints = tracks.load_hints(jobs.rebase_path(path))
     except (OSError, ValueError, TypeError) as exc:
         log.warning("job %s: speaker hints unusable, no names: %s", job_id, exc)
         return segments

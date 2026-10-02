@@ -352,8 +352,11 @@ def test_meet_speaker_hints_name_the_mixed_transcript(tmp_path):
     assert text == "[00:00] Alice: hello there\n[00:06] Bob: hi"
 
 
-def test_unreadable_speaker_hints_keep_the_unnamed_transcript(tmp_path):
-    text = _run_mixed(
-        tmp_path, [Segment(0.0, 2.0, "hello")], speaker_hints_path=str(tmp_path / "missing")
-    )
+@pytest.mark.parametrize("hints_path", ["missing", True, "overflow"])
+def test_unusable_speaker_hints_keep_the_unnamed_transcript(tmp_path, hints_path):
+    if hints_path == "overflow":
+        (tmp_path / "overflow").write_text('{"offset_s": 1' + "0" * 400 + ', "speaker": "A"}\n')
+    if isinstance(hints_path, str):
+        hints_path = str(tmp_path / hints_path)
+    text = _run_mixed(tmp_path, [Segment(0.0, 2.0, "hello")], speaker_hints_path=hints_path)
     assert text == "[00:00] hello"
