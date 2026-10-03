@@ -86,6 +86,35 @@ def test_mixed_audio_job_runs_end_to_end(tmp_path):
     assert job["outline_title"] == "2026-09-13 standup"
 
 
+def test_a_job_without_zulip_fields_runs_and_titles_the_doc_from_title(tmp_path):
+    """gcalendar-recording-bot sends no message_id/stream/topic/dm_user_id."""
+    make_job(tmp_path)
+    webhook = {
+        "event": "recording.finished",
+        "id": JOB_ID,
+        "title": "Q3 planning",
+        "audio_path": str(tmp_path / "audio.webm"),
+        "callback_url": CALLBACK_URL,
+    }
+    jobs.save_webhook(JOB_ID, json.dumps(webhook).encode())
+    seen = {}
+
+    def send(payload):
+        seen["title"] = payload["data"]["meeting"]["title"]
+        return "https://outline.example/doc/abc", "2026-09-13 Q3 planning"
+
+    worker.run_job(
+        JOB_ID,
+        transcribe=lambda _path: [Segment(0.0, 2.0, "hi")],
+        transcribe_tracks=boom,
+        send=send,
+        callback=lambda *_a: None,
+    )
+
+    assert seen["title"] == "Q3 planning"
+    assert jobs.load_job(JOB_ID)["state"] == "done"
+
+
 def test_a_silent_recording_publishes_the_no_speech_placeholder(tmp_path, caplog):
     """A 0-segment ASR result still gets a document and a callback, so the user
     learns the call was silent instead of getting an empty page."""
