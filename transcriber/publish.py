@@ -107,6 +107,9 @@ def build_anarlog_payload(webhook: dict, transcript_text: str) -> dict:
     placeholders) and the callback still tells the user where it is.
     """
     job_id = webhook["id"]
+    title = webhook.get("title")
+    if not (isinstance(title, str) and title.strip()):
+        title = webhook.get("topic") or "Meeting"
     return {
         "id": job_id,
         "event": EVENT,
@@ -114,9 +117,10 @@ def build_anarlog_payload(webhook: dict, transcript_text: str) -> dict:
         "data": {
             "meeting": {
                 "id": job_id,
-                # The topic alone: tr2outline prefixes the date from created_at itself
-                # (FormatDocumentTitle), so a date here would be printed twice.
-                "title": webhook.get("topic") or "Meeting",
+                # The meeting name alone (title, else topic): tr2outline prefixes the date
+                # from created_at itself (FormatDocumentTitle), so a date here would be
+                # printed twice.
+                "title": title,
                 "note": "",
                 "summaries": [],
                 "participants": webhook.get("participants") or [],

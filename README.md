@@ -29,7 +29,7 @@ network, everything runs on the CPU of your own server.
 
 ## 📥 Input: the `recording.finished` webhook
 
-jitsi-capture sends `POST /webhook`:
+The orchestrator (zulip-recording-bot or gcalendar-recording-bot) sends `POST /webhook`:
 
 | Header | Value |
 |---|---|
@@ -48,6 +48,7 @@ Body:
   "message_id": 123456,
   "stream": "<stream>",
   "topic": "<topic>",
+  "title": "<meeting name>",
   "jitsi_url": "https://meet.jit.si/<room>",
   "audio_path": "/data/jobs/123456/audio.webm",
   "duration_s": 1834.2,
@@ -61,6 +62,12 @@ Body:
   ]
 }
 ```
+
+Only `id`, `audio_path` and `callback_url` are required. `title` is optional:
+the meeting's real name (gcalendar-recording-bot knows it), used as the Outline
+document title; when absent or empty the title falls back to `topic`, then to
+`Meeting`. The Zulip fields `message_id`, `stream`, `topic` and `dm_user_id` are
+optional too — a non-Zulip orchestrator omits them.
 
 `tracks[]` is optional — it only appears once per-participant recording lands in
 jitsi-capture, so the code must work without it. `speaker_hints_path` is optional
@@ -151,7 +158,7 @@ with `200 OK` and ignored. Body (see `models.go` in tr2outline):
 }
 ```
 
-`title` is the topic alone — the date comes from `created_at`, which tr2outline
+`title` is the webhook's `title`, else its `topic` (else `Meeting`) — the date comes from `created_at`, which tr2outline
 prefixes to the Outline title itself (putting it here too would print it twice).
 
 `note`, `summaries` and `action_items` stay empty for now — there is no

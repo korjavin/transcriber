@@ -150,6 +150,23 @@ def test_payload_defaults_when_fields_are_absent_or_null(missing):
     assert payload["created_at"].endswith("Z")
 
 
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({"title": "Q3 planning", "topic": "Weekly sync"}, "Q3 planning"),
+        ({"title": "", "topic": "Weekly sync"}, "Weekly sync"),
+        ({"title": "   ", "topic": "Weekly sync"}, "Weekly sync"),
+        ({"title": None, "topic": "Weekly sync"}, "Weekly sync"),
+        ({"title": 42, "topic": "Weekly sync"}, "Weekly sync"),
+        ({"topic": "Weekly sync"}, "Weekly sync"),
+        ({"title": ""}, "Meeting"),
+        ({}, "Meeting"),
+    ],
+)
+def test_meeting_title_prefers_title_then_topic_then_meeting(fields, expected):
+    assert build_anarlog_payload({"id": "7", **fields}, "")["data"]["meeting"]["title"] == expected
+
+
 # --- send_to_tr2outline ----------------------------------------------------
 
 
